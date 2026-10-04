@@ -1,0 +1,7 @@
+{
+  "name": "mhrise-save-converter",
+  "private": true,
+  "scripts": {
+    "release": "python3 tools/release.py"
+  }
+}
