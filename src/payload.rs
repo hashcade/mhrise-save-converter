@@ -5,6 +5,8 @@
 //! limited to the self-describing save payload and does not depend on its UI
 //! or game asset database.
 
+use std::ops::Range;
+
 use anyhow::{Context, Result, bail};
 
 const ARRAY_MARKER: u32 = 0xffee_ffee;
@@ -70,13 +72,21 @@ impl SavePayload {
 
   pub fn parse_at_offset(data: &[u8], alignment_offset: usize) -> Result<Self> {
     let mut reader = Reader::new(data, alignment_offset);
+    Self::read(&mut reader)
+  }
+
+  fn read(reader: &mut Reader<'_>) -> Result<Self> {
     let mut entries = Vec::new();
     while reader.remaining() > 0 {
       if reader.remaining() < 12 && reader.rest().iter().all(|byte| *byte == 0) {
         break;
       }
       let native_hash = reader.read_u32().context("missing native-field hash")?;
-      let class = read_class(&mut reader).with_context(|| {
+      if !reader.byte_array_paths.is_empty() {
+        reader.path.clear();
+        reader.path.push(native_hash);
+      }
+      let class = read_class(reader).with_context(|| {
         format!("could not parse top-level class for native hash {native_hash:08x}")
       })?;
       entries.push(NativeClass { native_hash, class });
@@ -98,6 +108,19 @@ impl SavePayload {
   }
 }
 
+// Locate only explicitly selected fields. Callers can change fixed-size data without
+// reserializing unrelated fields or their original alignment padding.
+pub(crate) fn byte_array_ranges(
+  data: &[u8],
+  alignment_offset: usize,
+  paths: &[&[u32]],
+) -> Result<Vec<(usize, Range<usize>)>> {
+  let mut reader = Reader::new(data, alignment_offset);
+  reader.byte_array_paths = paths;
+  SavePayload::read(&mut reader)?;
+  Ok(reader.byte_array_ranges)
+}
+
 fn read_class(reader: &mut Reader<'_>) -> Result<Class> {
   let field_count = reader.read_u32()? as usize;
   let hash = reader.read_u32()?;
@@ -117,6 +140,12 @@ fn read_field(reader: &mut Reader<'_>) -> Result<Field> {
   let offset = reader.position();
   let hash = reader.read_u32()?;
   let field_type = reader.read_i32()?;
+  if !reader.byte_array_paths.is_empty() {
+    reader.path.push(hash);
+    if reader.selected_byte_array().is_some() && field_type != FIELD_TYPE_ARRAY {
+      bail!("selected identity field {hash:08x} is not a byte array");
+    }
+  }
   let value = (|| {
     Ok::<FieldValue, anyhow::Error>(match field_type {
       FIELD_TYPE_ARRAY => FieldValue::Array(read_array(reader)?),
@@ -132,6 +161,9 @@ fn read_field(reader: &mut Reader<'_>) -> Result<Field> {
   .with_context(|| {
     format!("could not parse field {hash:08x} type {field_type} at offset {offset:#x}")
   })?;
+  if !reader.byte_array_paths.is_empty() {
+    reader.path.pop();
+  }
   reader.align(4)?;
   Ok(Field { hash, field_type, value })
 }
@@ -157,6 +189,13 @@ fn read_array(reader: &mut Reader<'_>) -> Result<Array> {
     None
   };
 
+  let selected = reader.selected_byte_array();
+  let start = reader.position();
+  if selected.is_some() && (member_type != 4 || member_size != 1 || array_type != ARRAY_TYPE_VALUE)
+  {
+    bail!("selected identity field has an unsupported byte-array layout");
+  }
+
   let mut values = Vec::with_capacity(len);
   for _ in 0..len {
     let value = if array_type == ARRAY_TYPE_CLASS {
@@ -169,6 +208,9 @@ fn read_array(reader: &mut Reader<'_>) -> Result<Array> {
       }
     };
     values.push(value);
+  }
+  if let Some(index) = selected {
+    reader.byte_array_ranges.push((index, start..reader.position()));
   }
   reader.align(4)?;
   Ok(Array { member_type, member_size, array_type, class_hashes, values })
@@ -296,11 +338,25 @@ struct Reader<'a> {
   data: &'a [u8],
   offset: usize,
   alignment_offset: usize,
+  byte_array_paths: &'a [&'a [u32]],
+  path: Vec<u32>,
+  byte_array_ranges: Vec<(usize, Range<usize>)>,
 }
 
 impl<'a> Reader<'a> {
   fn new(data: &'a [u8], alignment_offset: usize) -> Self {
-    Self { data, offset: 0, alignment_offset }
+    Self {
+      data,
+      offset: 0,
+      alignment_offset,
+      byte_array_paths: &[],
+      path: Vec::new(),
+      byte_array_ranges: Vec::new(),
+    }
+  }
+
+  fn selected_byte_array(&self) -> Option<usize> {
+    self.byte_array_paths.iter().position(|path| *path == self.path)
   }
 
   fn remaining(&self) -> usize {

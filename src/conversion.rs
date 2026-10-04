@@ -13,6 +13,7 @@ use crate::{
   defaults::steam_template_from_source,
   discover::{SaveFileKind, discover_save_files},
   format::{ChecksumStatus, DsssHeader, Platform, SaveFlags, checksum_status, parse_header},
+  identity::resign_owner_identities,
   payload::SavePayload,
   translation::merge_onto_template,
 };
@@ -367,6 +368,14 @@ pub fn convert_bytes_with_template(
       .0
       .encode_at_offset(class_stream_offset(requested_platform))
       .context("could not encode translated class stream")?;
+  }
+  if source_platform == Platform::Steam && requested_platform == Platform::Steam {
+    resign_owner_identities(
+      &mut payload,
+      options.source_steamid64.context("Steam source requires --source-steamid64")?,
+      options.target_steamid64.context("Steam target requires --target-steamid64")?,
+    )
+    .context("could not update the hunter's own Steam identities")?;
   }
   pack_payload(&payload, options.target, options.target_steamid64, options.target_curve_index)
     .with_context(|| format!("cannot pack {} as target format", source_platform))
