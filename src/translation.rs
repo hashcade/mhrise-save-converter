@@ -10,10 +10,12 @@ const FLAG_DATA_SAVE_DATA_CLASS_HASH: u32 = 0xd41c_bf69;
 const GUILD_CARD_DATA_CLASS_HASH: u32 = 0x4454_1321;
 const HUNTER_RECORD_CLASS_HASH: u32 = 0xaf6e_a643;
 const NETWORK_SAVE_DATA_CLASS_HASH: u32 = 0xfdb8_053d;
+const OPTION_SYSTEM_SAVE_DATA_CLASS_HASH: u32 = 0x34c5_d174;
 const QUEST_SAVE_DATA_CLASS_HASH: u32 = 0xdc89_2e15;
 const SYSTEM_SAVE_DATA_CLASS_HASH: u32 = 0x5766_f30b;
 
 const BBQ_NEW_MARK_BIT_LIST_FIELD_HASH: u32 = 0xea58_bbfe;
+const DECIDE_DATA_FIELD_HASH: u32 = 0x9428_4f65;
 const GOOD_FOLLOWER_DATA_LIST_FIELD_HASH: u32 = 0xb385_b976;
 const GUILD_CARD_ID_FIELD_HASH: u32 = 0x85ef_5b34;
 const HUNTER_UNIQUE_ID_FIELD_HASH: u32 = 0x0a96_0102;
@@ -142,6 +144,7 @@ fn preserves_target_platform_state(class_hash: u32, field_hash: u32) -> bool {
           | NET_ERROR_BAN_QUEST_LIST_FIELD_HASH
       )
       | (NETWORK_SAVE_DATA_CLASS_HASH, UNIQUE_ID_BIN_FIELD_HASH)
+      | (OPTION_SYSTEM_SAVE_DATA_CLASS_HASH, DECIDE_DATA_FIELD_HASH)
       | (QUEST_SAVE_DATA_CLASS_HASH, PLATFORM_QUEST_STATE_LIST_FIELD_HASH)
       | (SYSTEM_SAVE_DATA_CLASS_HASH, GOOD_FOLLOWER_DATA_LIST_FIELD_HASH)
   )
@@ -312,6 +315,48 @@ mod tests {
       assert_eq!(merged, target);
       assert_eq!(report.preserved_target_top_level_classes, 1);
       assert_eq!(report.copied_source_fields, 0);
+    }
+  }
+
+  #[test]
+  fn preserves_target_confirm_button_without_resetting_other_options() {
+    // SystemSaveData.DecideData; values are deliberately different, not interpreted as A/B.
+    const DECIDE_DATA: u32 = 0x9428_4f65;
+    let options = |decide| NativeClass {
+      native_hash: 0xb0ca_70c9,
+      class: Class {
+        hash: 0x34c5_d174,
+        fields: vec![
+          Field { hash: DECIDE_DATA, field_type: 7, value: scalar(decide) },
+          field(100, decide + 10),
+        ],
+      },
+    };
+    for (source_decide, target_decide) in [(0, 1), (1, 0)] {
+      let source = SavePayload {
+        entries: vec![
+          options(source_decide),
+          NativeClass {
+            native_hash: 1,
+            class: Class { hash: 10, fields: vec![field(DECIDE_DATA, 42)] },
+          },
+        ],
+      };
+      let target = SavePayload {
+        entries: vec![
+          options(target_decide),
+          NativeClass {
+            native_hash: 1,
+            class: Class { hash: 10, fields: vec![field(DECIDE_DATA, 9)] },
+          },
+        ],
+      };
+      let (merged, report) = merge_onto_template(&source, &target);
+      assert_eq!(merged.entries[0].class.fields[0], target.entries[0].class.fields[0]);
+      assert_eq!(merged.entries[0].class.fields[1], source.entries[0].class.fields[1]);
+      assert_eq!(merged.entries[1], source.entries[1]);
+      assert_eq!(report.preserved_target_fields, 1);
+      assert_eq!(report.copied_source_fields, 2);
     }
   }
 

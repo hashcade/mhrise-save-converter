@@ -49,6 +49,8 @@ mhrise-save convert /path/to/win64_save /path/to/new-switch-save \
   --target-reference /path/to/existing/switch-save
 ```
 
+Cross-platform conversion keeps the destination template's confirmation-button setting (`OptionSystemSave.SystemSaveData.DecideData`) instead of copying the source platform's setting. Use a template whose confirm/cancel controls already work as intended. Other matching user settings and gameplay progress continue to come from the source; this does not reset all controller settings or hardcode an A/B mapping.
+
 ## Steam → Steam
 
 Provide the source account ID and destination account ID. The source Curve Index is detected automatically when omitted:

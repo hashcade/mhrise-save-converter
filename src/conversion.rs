@@ -673,6 +673,71 @@ mod tests {
   }
 
   #[test]
+  fn steam_to_switch_keeps_template_confirm_button_and_source_progress() {
+    let fixture = |decide: u32, progress: u32| SavePayload {
+      entries: vec![
+        NativeClass {
+          native_hash: 0xb0ca_70c9,
+          class: Class {
+            hash: 0x34c5_d174,
+            fields: vec![Field {
+              hash: 0x9428_4f65,
+              field_type: 7,
+              value: FieldValue::Scalar { size: 4, bytes: decide.to_le_bytes().to_vec() },
+            }],
+          },
+        },
+        NativeClass {
+          native_hash: 1,
+          class: Class {
+            hash: 10,
+            fields: vec![Field {
+              hash: 100,
+              field_type: 8,
+              value: FieldValue::Scalar { size: 4, bytes: progress.to_le_bytes().to_vec() },
+            }],
+          },
+        },
+      ],
+    };
+    let source = fixture(1, 7);
+    let template = fixture(0, 9);
+    let steam = pack_payload(
+      &source.encode_at_offset(16).unwrap(),
+      TargetPlatform::Steam,
+      Some(TEST_STEAM_ID),
+      Some(0),
+    )
+    .unwrap();
+    let switch = pack_payload(
+      &template.encode_at_offset(12).unwrap(),
+      TargetPlatform::NintendoSwitch,
+      None,
+      None,
+    )
+    .unwrap();
+    let output = convert_bytes_with_template(
+      &steam,
+      Some(&switch),
+      ConversionRequest {
+        target: TargetPlatform::NintendoSwitch,
+        source_steamid64: Some(TEST_STEAM_ID),
+        target_steamid64: None,
+        source_curve_index: Some(0),
+        target_curve_index: None,
+        target_reference: None,
+        force: false,
+      },
+    )
+    .unwrap();
+    let converted = SavePayload::parse_at_offset(&unpack_deflate(&output).unwrap(), 12).unwrap();
+    assert_eq!(converted.entries[0], template.entries[0]);
+    assert_eq!(converted.entries[1], source.entries[1]);
+    assert_eq!(parse_header(&output).unwrap().platform(), Platform::NintendoSwitch);
+    assert_eq!(checksum_status(&output).unwrap(), ChecksumStatus::Valid);
+  }
+
+  #[test]
   fn cross_platform_conversion_uses_target_template_schema() {
     let source_payload = SavePayload {
       entries: vec![NativeClass {
