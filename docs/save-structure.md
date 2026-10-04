@@ -16,4 +16,6 @@ The core formats share the DSSS v2 container but use different payload protectio
 - Known album/photo files use an unencrypted wrapper on Switch and a `HAS_ID` (`0x02`) wrapper on Steam.
 - Both formats contain an outer MurmurHash3 integrity value; Steam core files also contain Citrus block checks.
 
-Same-platform resigning preserves the logical payload and rebuilds the required container integrity values. Cross-platform conversion follows the destination class schema, copies matching source fields, and preserves or constructs destination-only fields. Use a new output directory and keep the original save as a backup; files outside the supported patterns cannot currently be reconstructed.
+Steam → Steam resigning updates two initialized owner identity byte arrays and their BinaryInfo CRCs: `HunterRecordSaveData.HunterRecordNetworkUniqueId.Data` and `GuildCardSaveData.MyData.UniqueIDByteArray`. It preserves every other core payload byte and rebuilds the required container integrity values. Other hunters' guild cards and uninitialized identities are not changed. Same-platform album conversion preserves the raw payload and updates only the wrapper and checksum.
+
+Cross-platform conversion follows the destination class schema, copies matching source fields, and preserves or constructs destination-only fields. Use a new output directory and keep the original save as a backup; files outside the supported patterns cannot currently be reconstructed.

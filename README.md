@@ -3,7 +3,7 @@
 Native GUI and library tooling for converting *Monster Hunter Rise* saves between Nintendo Switch and Steam formats.
 
 > [!WARNING]
-> **Test status:** Nintendo Switch → Steam conversion has been tested and confirmed working. Steam → Steam resigning has been verified on real save files: the converted core files decrypt with the target account, pass integrity checks, and preserve the source payload byte for byte; in-game loading has not yet been confirmed. Steam → Nintendo Switch has not been tested yet. Always back up your saves first.
+> **Test status:** Nintendo Switch → Steam conversion has been tested and confirmed working. The updated Steam → Steam converter has passed real-file decryption, curve-point, integrity, and payload-preservation checks. In one migration, the user reported successful loading after an additional coordinated character-slot swap; that workaround is not part of normal conversion, and the updated converter's output without it has not been confirmed in-game. Steam → Nintendo Switch has not been tested yet. Always back up your saves first.
 
 ## GUI
 
@@ -55,6 +55,8 @@ mhrise-save convert /path/to/SteamData/win64_save /path/to/new-steam-save \
 Exit the game, back up the destination save, and disable Steam Cloud while installing and testing the output. The destination path normally uses the account's **32-bit AccountID**, not its full SteamID64: `<Steam directory>/userdata/<AccountID>/1446780/remote/win64_save`.
 
 **Albums:** the GUI/CLI includes numeric `SS<group>_` auxiliary files, including this sample's 85 `SS2_*` files and three `SS1_*` files. Steam → Steam album conversion updates the AccountID wrapper and outer checksum without reserializing the payload or its padding. Cross-platform album conversion still realigns the class stream for the destination wrapper. Copying Steam album files unchanged does not update their account ID.
+
+**Owner identity:** Steam → Steam conversion also updates the hunter's own network-record and guild-card Steam identity blobs, including their BinaryInfo CRCs. Empty identities stay empty; other hunters' guild cards are untouched. All other core payload bytes, including slot metadata, GUIDs, statistics, progress, and padding, remain unchanged. Unsupported or mismatched owner identities are rejected rather than guessed. See [Steam resigning findings](docs/steam-resigning.md) for the fixes and remaining limitations.
 
 ## Credits
 

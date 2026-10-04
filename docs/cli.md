@@ -63,6 +63,8 @@ mhrise-save convert /path/to/source/win64_save /path/to/new-steam-save \
 
 Add `--source-curve-index` or `--target-curve-index` only when automatic detection is unavailable. Add `--force` only when intentionally reusing a non-empty output path.
 
+Resigning updates the supported identity fields owned by the hunter, not other hunters' guild cards. It does not move characters between slots, replace statistics, or copy the target account's gameplay progress. For known fixes and the limits of the reported in-game slot-swap recovery, see [Steam resigning findings](steam-resigning.md).
+
 ## Steam IDs and Curve Index
 
 `SteamID64` is the 17-digit numeric Steam account identifier. It is not a display name, email address, or custom `/id/...` profile name. Get it from the numeric `steamcommunity.com/profiles/<STEAMID64>` URL of the account; if the profile uses a custom URL, use a SteamID lookup tool or copy the canonical numeric profile URL.
@@ -72,7 +74,7 @@ Add `--source-curve-index` or `--target-curve-index` only when automatic detecti
 - Steam → Steam: provide both source and target IDs.
 - `Curve Index` is a Citrus encryption parameter, not an account identifier. The tool detects it from a Steam source save, and detects the destination value from a Steam `--target-reference` template.
 
-On Windows, Steam saves are commonly under `Steam/userdata/<STEAMID64>/1446780/remote/win64_save`. The `1446780` directory is Monster Hunter Rise's Steam app ID.
+On Windows, Steam saves are commonly under `Steam/userdata/<AccountID>/1446780/remote/win64_save`. This directory uses the account's **32-bit AccountID** (the low 32 bits of SteamID64), not the full SteamID64 required by the converter. The `1446780` directory is Monster Hunter Rise's Steam app ID.
 
 ## Safety
 
