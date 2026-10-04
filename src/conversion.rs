@@ -412,11 +412,16 @@ pub fn convert_auxiliary_bytes(
     TargetPlatform::NintendoSwitch => DSSS_HEADER_LEN,
     TargetPlatform::Steam => align_up(DSSS_HEADER_LEN, 8) + 8,
   };
-  let payload =
+  let parsed =
     SavePayload::parse_at_offset(&data[source_payload_offset..payload_end], source_payload_offset)
-      .context("invalid auxiliary class stream")?
+      .context("invalid auxiliary class stream")?;
+  let payload = if source_payload_offset == target_payload_offset {
+    data[source_payload_offset..payload_end].to_vec()
+  } else {
+    parsed
       .encode_at_offset(target_payload_offset)
-      .context("could not realign auxiliary class stream")?;
+      .context("could not realign auxiliary class stream")?
+  };
 
   let mut output = Vec::with_capacity(data.len() + 12);
   output.extend_from_slice(b"DSSS");
@@ -670,6 +675,37 @@ mod tests {
     let roundtrip = convert_auxiliary_bytes(&steam, TargetPlatform::NintendoSwitch, None)
       .expect("Steam auxiliary conversion should succeed");
     assert_eq!(roundtrip, switch);
+  }
+
+  #[test]
+  fn auxiliary_resigning_preserves_raw_payload_and_padding() {
+    let payload = SavePayload {
+      entries: vec![NativeClass {
+        native_hash: 1,
+        class: Class {
+          hash: 2,
+          fields: vec![Field {
+            hash: 3,
+            field_type: 15,
+            value: FieldValue::String(vec![b'X' as u16]),
+          }],
+        },
+      }],
+    };
+    let mut source = b"DSSS".to_vec();
+    source.extend_from_slice(&2u32.to_le_bytes());
+    source.extend_from_slice(&SaveFlags::HAS_ID.bits().to_le_bytes());
+    source.resize(16, 0);
+    source.extend_from_slice(&4660u64.to_le_bytes());
+    source.extend_from_slice(&payload.encode_at_offset(24).unwrap());
+    let len = source.len();
+    source[len - 2..].copy_from_slice(&[0xa5, 0x5a]);
+    let source = finish_file(source).unwrap();
+    let output =
+      convert_auxiliary_bytes(&source, TargetPlatform::Steam, Some(TEST_STEAM_ID)).unwrap();
+    assert_eq!(&output[24..output.len() - 4], &source[24..source.len() - 4]);
+    assert_eq!(&output[16..24], &(TEST_STEAM_ID & u32::MAX as u64).to_le_bytes());
+    assert_eq!(checksum_status(&output).unwrap(), ChecksumStatus::Valid);
   }
 
   #[test]

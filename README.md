@@ -54,7 +54,7 @@ mhrise-save convert /path/to/SteamData/win64_save /path/to/new-steam-save \
 
 Exit the game, back up the destination save, and disable Steam Cloud while installing and testing the output. The destination path normally uses the account's **32-bit AccountID**, not its full SteamID64: `<Steam directory>/userdata/<AccountID>/1446780/remote/win64_save`.
 
-**Album limitation:** this sample contained 85 `SS2_*` files. The current GUI/CLI discovers only `SS1_*`, `SS4_*`, and `SS7_*` auxiliary files and omits `SS2_*`. The one-off migration preserved all 88 album files using the auxiliary conversion API and verified their parsed payloads were unchanged, but that extra handling is not yet built into the GUI/CLI. To preserve the complete album for similar saves, `SS2_*` needs the same account-wrapper conversion; copying those files unchanged does not update their account ID.
+**Albums:** the GUI/CLI includes numeric `SS<group>_` auxiliary files, including this sample's 85 `SS2_*` files and three `SS1_*` files. Steam → Steam album conversion updates the AccountID wrapper and outer checksum without reserializing the payload or its padding. Cross-platform album conversion still realigns the class stream for the destination wrapper. Copying Steam album files unchanged does not update their account ID.
 
 ## Credits
 

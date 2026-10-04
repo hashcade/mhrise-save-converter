@@ -6,7 +6,7 @@ Monster Hunter Rise saves are directories containing several DSSS container file
 | --- | --- | --- |
 | `data00-1.bin` | System and global state | Converted with the platform schema |
 | `data###Slot.bin` | Hunter progress, equipment, items, and quests | Converted with the platform schema |
-| `SS1_*`, `SS4_*`, `SS7_*` | Album and screenshot data | Rewrapped while preserving the payload |
+| `SS<group>_data###Slot.bin` (positive numeric group), `SS<group>_data00-1.bin` | Album and screenshot data, including `SS2_*` | Rewrapped while preserving the raw payload on the same platform |
 | Other files | Version- or feature-specific data | Unsupported and omitted |
 
 The core formats share the DSSS v2 container but use different payload protection:

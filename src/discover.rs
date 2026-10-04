@@ -46,9 +46,12 @@ pub fn is_core_filename(name: &str) -> bool {
 }
 
 pub fn is_auxiliary_filename(name: &str) -> bool {
-  ["SS1_", "SS4_", "SS7_"]
-    .iter()
-    .any(|prefix| name.strip_prefix(prefix).is_some_and(is_core_filename))
+  let Some((group, suffix)) = name.strip_prefix("SS").and_then(|name| name.split_once('_')) else {
+    return false;
+  };
+  group.starts_with(|character: char| matches!(character, '1'..='9'))
+    && group.bytes().all(|byte| byte.is_ascii_digit())
+    && is_core_filename(suffix)
 }
 
 pub fn discover_core_files(input: &Path) -> Result<Vec<CoreFile>> {
@@ -112,7 +115,14 @@ mod tests {
     assert!(is_auxiliary_filename("SS1_data001Slot.bin"));
     assert!(is_auxiliary_filename("SS4_data030Slot.bin"));
     assert!(is_auxiliary_filename("SS7_data070Slot.bin"));
-    assert!(!is_auxiliary_filename("SS2_data001Slot.bin"));
+    assert!(is_auxiliary_filename("SS2_data001Slot.bin"));
+    assert!(is_auxiliary_filename("SS3_data001Slot.bin"));
+    assert!(is_auxiliary_filename("SS10_data001Slot.bin"));
+    assert!(!is_auxiliary_filename("SS0_data001Slot.bin"));
+    assert!(!is_auxiliary_filename("SS01_data001Slot.bin"));
+    assert!(!is_auxiliary_filename("SSX_data001Slot.bin"));
+    assert!(!is_auxiliary_filename("SS_data001Slot.bin"));
+    assert!(!is_auxiliary_filename("SS2_notes.txt"));
     assert!(!is_auxiliary_filename("SS1_data001Slot.dat"));
   }
 }
