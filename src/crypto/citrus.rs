@@ -127,18 +127,13 @@ impl Citrus {
     pub_key: (Integer, Integer),
     params: &CurveParams,
   ) -> Option<[u8; 128]> {
-    // inverse of decrypt_key_segment: value = p_m.0 / 100
-    // so plaintext x = value * 100
-    let x = Integer::from(value) * Integer::from(100);
-    // you need to recover a valid point with this x coordinate
-    // y^2 = x^3 + ax + b mod p
-    let x3 = x.modpow(&Integer::from(3u32), &params.p);
-    let ax = (&params.a * &x) % &params.p;
-    let rhs = (x3 + ax + &params.b) % &params.p;
-    // compute y = rhs^((p+1)/4) mod p  (assumes p ≡ 3 mod 4)
-    let exp = (&params.p + Integer::from(1u32)) / Integer::from(4u32);
-    let y = rhs.modpow(&exp, &params.p);
-    let plaintext_point = (x, y);
+    // Decoding divides x by 100; search that entire bucket for a curve point.
+    let base = Integer::from(value) * Integer::from(100);
+    let plaintext_point = (0..100).find_map(|remainder| {
+      let x = &base + Integer::from(remainder);
+      let rhs = (x.modpow(&Integer::from(3), &params.p) + &params.a * &x + &params.b) % &params.p;
+      modular_sqrt(&rhs, &params.p).map(|y| (x, y))
+    })?;
 
     let (c1, c2) = Self::encrypt_ec_elgamal(k, plaintext_point, pub_key, params)?;
 
@@ -151,15 +146,24 @@ impl Citrus {
   }
 
   fn decrypt_key_segment(&self, segment: &[u8], params: &CurveParams) -> Option<Integer> {
+    if segment.len() != 128 {
+      return None;
+    }
     let c1_x = <Integer as EccInteger>::from_bytes_le(&segment[0..32]);
     let c1_y = <Integer as EccInteger>::from_bytes_le(&segment[32..64]);
     let c2_x = <Integer as EccInteger>::from_bytes_le(&segment[64..96]);
     let c2_y = <Integer as EccInteger>::from_bytes_le(&segment[96..128]);
     let c1 = (c1_x, c1_y);
     let c2 = (c2_x, c2_y);
+    if !point_on_curve(&c1, params) || !point_on_curve(&c2, params) {
+      return None;
+    }
     let p_m = self.decrypt_ec_elgamal(c1, c2, params)?;
+    if !point_on_curve(&p_m, params) {
+      return None;
+    }
     let x: Integer = p_m.0 / 100;
-    Some(x)
+    (x <= Integer::from(u64::MAX)).then_some(x)
   }
 
   fn ecc_encrypt_keys(
@@ -170,10 +174,10 @@ impl Citrus {
     params: &CurveParams,
   ) -> Option<[u8; 512]> {
     let mut out = [0u8; 512];
-    let k0 = Integer::from(rand::random::<u64>());
-    let k1 = Integer::from(rand::random::<u64>());
-    let k2 = Integer::from(rand::random::<u64>());
-    let k3 = Integer::from(rand::random::<u64>());
+    let k0 = Integer::from(rand::random::<u64>().max(1));
+    let k1 = Integer::from(rand::random::<u64>().max(1));
+    let k2 = Integer::from(rand::random::<u64>().max(1));
+    let k3 = Integer::from(rand::random::<u64>().max(1));
 
     let key_lo = u64::from_le_bytes(key[0..8].try_into().unwrap());
     let key_hi = u64::from_le_bytes(key[8..16].try_into().unwrap());
@@ -209,40 +213,14 @@ impl Citrus {
 
   // for completeness, just do the whole thang until you find one that works
   pub fn brute_force_find_params(&self, buf: &[u8], decrypted_len: usize) -> Option<CurveParams> {
-    if !Self::valid_payload_layout(buf, decrypted_len) {
+    if decrypted_len == 0 || !Self::valid_payload_layout(buf, decrypted_len) {
       return None;
     }
-    let num_blocks = buf.len() / Self::BLOCK_SIZE;
-    if num_blocks == 0 {
-      return None;
-    }
-    let mut key = [0u8; 16];
-    let mut iv = [0u8; 16];
-    let mut ecc_keys = [0u8; Self::ENC_KEYS_SIZE];
-    let mut dec_buf = [0u8; Self::ENC_DATA_SIZE];
-    let block = &buf[..Self::BLOCK_SIZE];
-
-    // Decrypt the ECC encrypted keys
-    key.copy_from_slice(&block[0..16]);
-    iv.copy_from_slice(&block[16..32]);
-    ecc_keys.copy_from_slice(&block[32..32 + Self::ENC_KEYS_SIZE]);
-    Self::aes_decrypt(&mut ecc_keys, key, iv);
-
-    // Decrypt the main data aes keys with ECC
-    // if the curve params are unset try to brute force
+    // Accept a curve only after validating all block hashes, not a zero-count heuristic.
     for curve in &CURVES {
-      let curve_params = CurveParams::from(curve);
-      let Some((key, iv)) = self.ecc_decrypt_keys(&ecc_keys, &curve_params) else {
-        continue;
-      };
-      // when decrypting, the blocks are always padded to the 0x40000 length i think
-      dec_buf.copy_from_slice(
-        &block[32 + Self::ENC_KEYS_SIZE..32 + Self::ENC_KEYS_SIZE + Self::ENC_DATA_SIZE],
-      );
-      Self::aes_decrypt(&mut dec_buf, key, iv);
-      let num_zeros = dec_buf.iter().filter(|&&b| b == 0).count();
-      if num_zeros > dec_buf.len() / 2 {
-        return Some(curve_params);
+      let candidate = Self::new(self.steamid64, Some(curve.index as usize));
+      if candidate.decrypt(buf, decrypted_len).is_some() {
+        return Some(CurveParams::from(curve));
       }
     }
     None
@@ -403,6 +381,64 @@ impl Citrus {
   }
 }
 
+fn point_on_curve(point: &(Integer, Integer), params: &CurveParams) -> bool {
+  let (x, y) = point;
+  let zero = Integer::from(0);
+  x >= &zero
+    && x < &params.p
+    && y >= &zero
+    && y < &params.p
+    && (y * y) % &params.p
+      == (x.modpow(&Integer::from(3), &params.p) + &params.a * x + &params.b) % &params.p
+}
+
+// Tonelli-Shanks also handles Citrus primes congruent to 1 modulo 4.
+fn modular_sqrt(value: &Integer, prime: &Integer) -> Option<Integer> {
+  let zero = Integer::from(0);
+  let one = Integer::from(1);
+  if value == &zero {
+    return Some(zero);
+  }
+  let prime_minus_one = prime - &one;
+  if value.modpow(&(&prime_minus_one >> 1), prime) != one {
+    return None;
+  }
+  if prime % 4 == Integer::from(3) {
+    return Some(value.modpow(&((prime + &one) >> 2), prime));
+  }
+
+  let mut odd = prime_minus_one.clone();
+  let mut powers = 0usize;
+  while !EccInteger::is_odd(&odd) {
+    odd >>= 1;
+    powers += 1;
+  }
+  let mut non_residue = Integer::from(2);
+  while non_residue.modpow(&(&prime_minus_one >> 1), prime) == one {
+    non_residue += 1;
+  }
+  let mut c = non_residue.modpow(&odd, prime);
+  let mut root = value.modpow(&((&odd + &one) >> 1), prime);
+  let mut t = value.modpow(&odd, prime);
+  while t != one {
+    let mut i = 0usize;
+    let mut squared = t.clone();
+    while squared != one && i < powers {
+      squared = (&squared * &squared) % prime;
+      i += 1;
+    }
+    if i == powers {
+      return None;
+    }
+    let b = c.modpow(&(&one << (powers - i - 1)), prime);
+    root = (root * &b) % prime;
+    c = (&b * &b) % prime;
+    t = (t * &c) % prime;
+    powers = i;
+  }
+  ((&root * &root) % prime == *value).then_some(root)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -458,6 +494,46 @@ mod tests {
     let encrypted = Citrus::new(12345678, Some(0)).encrypt(&plaintext).unwrap();
     let decrypted = Citrus::new(12345678, None).decrypt(&encrypted, plaintext.len()).unwrap();
     assert_eq!(plaintext, decrypted, "Curve detection roundtrip failed");
+  }
+
+  #[test]
+  fn key_segments_use_valid_points_on_every_curve() {
+    let citrus = Citrus::new(12345678, None);
+    for raw in &CURVES {
+      let params = CurveParams::from(raw);
+      let public_key = citrus.public_key(&params).unwrap();
+      for value in [0, 1, 0x1234_5678_9abc_def0, u64::MAX] {
+        let segment =
+          Citrus::encrypt_key_segment(&Integer::from(17), value, public_key.clone(), &params)
+            .unwrap();
+        for point in segment.chunks_exact(64) {
+          let x = bytes_to_int(&point[..32]);
+          let y = bytes_to_int(&point[32..]);
+          assert_eq!(
+            (&y * &y) % &params.p,
+            (x.modpow(&Integer::from(3), &params.p) + &params.a * &x + &params.b) % &params.p,
+            "invalid point on curve {} for value {value}",
+            params.index,
+          );
+        }
+        assert_eq!(citrus.decrypt_key_segment(&segment, &params), Some(Integer::from(value)));
+      }
+    }
+  }
+
+  #[test]
+  fn rejects_invalid_key_segment_points() {
+    let citrus = Citrus::new(12345678, Some(0));
+    let params = CurveParams::from(&CURVES[0]);
+    let segment = [0u8; 128];
+    assert!(citrus.decrypt_key_segment(&segment, &params).is_none());
+  }
+
+  #[test]
+  fn detects_curve_without_assuming_zero_filled_payload() {
+    let plaintext = vec![0x42; Citrus::ENC_DATA_SIZE];
+    let encrypted = Citrus::new(12345678, Some(93)).encrypt(&plaintext).unwrap();
+    assert_eq!(Citrus::new(12345678, None).decrypt(&encrypted, plaintext.len()), Some(plaintext));
   }
 }
 
