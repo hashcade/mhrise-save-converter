@@ -471,7 +471,7 @@ impl GuiApp {
             let rect = response.rect;
             ui.painter().line_segment(
               [rect.left_bottom(), rect.right_bottom()],
-              egui::Stroke::new(2.0, color),
+              egui::Stroke::new(2.0_f32, color),
             );
           }
           if response.clicked() {
