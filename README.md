@@ -61,14 +61,14 @@ For pirated PC copies using TENOKE, account configuration is in `<game directory
 
 Pushes to `main` and pull requests run CI and four-platform packaging; documentation-only changes skip both. New runs cancel outdated CI/Build runs for the same ref. Version tags run only Release, which shares each platform's Rust dependency cache with Build. The release script's `chore: release v...` version-only commit still runs CI but skips Build, leaving packaging to Release. Releases are not cancelled by ordinary commits.
 
-Publish from a clean, up-to-date `main` checkout on macOS or Linux with Bash, Git, and Rust:
+Publish from a clean, up-to-date `main` checkout with Python 3.9+, Git, and Rust:
 
 ```bash
-./tools/release.sh --bump patch --yes
-./tools/release.sh --bump minor --yes
+python3 tools/release.py --bump patch --yes
+python3 tools/release.py --bump minor --yes
 ```
 
-Run only one command for the intended version increment. With no arguments, the script proposes a patch bump and asks for confirmation. `--current` publishes the existing package version without bumping it; existing tags are rejected. The script checks the CLI, updates `Cargo.toml`/`Cargo.lock`, commits the version bump, pushes `main`, and pushes an annotated tag. GitHub Actions builds and verifies the four release packages. Local publishing no longer needs Python; CI packaging still uses `scripts/package.py`.
+Run only one command for the intended version increment. With no arguments, the script proposes a patch bump and asks for confirmation. `--current` publishes the existing package version without bumping it; existing tags are rejected. The script checks the CLI, updates `Cargo.toml`/`Cargo.lock`, commits the version bump, pushes `main`, and pushes an annotated tag. GitHub Actions builds and verifies the four release packages. The publishing script uses only Python's standard library; CI packaging also uses `scripts/package.py`.
 
 ## Credits
 
