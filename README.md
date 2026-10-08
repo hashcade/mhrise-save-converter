@@ -13,9 +13,29 @@ Download the latest package from [Releases](https://github.com/jinghaihan/mhrise
 cargo run --release --bin mhrise-save-converter-gui
 ```
 
-Choose a source save, an output directory, and the target platform. For Steam conversion, enter the relevant SteamID64 and preferably select an existing target save as the template; the app can read the destination Curve Index automatically. The source and template are never modified. The GUI performs a preflight check, converts in the background, shows per-file progress, and can open the output folder.
+The GUI uses [GPUI Kit](https://github.com/longbridge/gpui-kit), with the same conversion and slot-management backend as the CLI. It follows the system's light/dark appearance. The form is ordered **Source save → Target save → Output folder**; Target save is an existing save for the destination platform, not an output folder. For Steam conversion, enter the relevant SteamID64 and preferably select that target save as the template; the app can read the destination Curve Index automatically. The source and template are never modified. The GUI performs a preflight check, converts in the background, shows per-file progress, and can open the output folder.
 
 Required SteamID64 fields are visible in the main form; Switch inputs do not need an ID. Advanced options contain only Curve Index overrides. Conversion can write into an existing non-empty directory without changing unrelated files. If generated filenames already exist, the GUI lists the conflicts and asks for confirmation before writing. Cancelling leaves the existing files unchanged.
+
+### Platform and build requirements
+
+The GPUI frontend targets macOS 15+ (Apple Silicon and Intel), Windows 10+, and Linux with a Vulkan-capable graphics driver. These requirements apply to the new frontend in source; previously published v0.3.0 packages still use egui. The build and release workflows retain all four native targets.
+
+Source builds use the Rust toolchain pinned in `rust-toolchain.toml`. macOS needs Xcode Command Line Tools; Windows needs the MSVC C++ toolchain and CMake. On Ubuntu, install the native GUI dependencies:
+
+```bash
+sudo apt-get install build-essential clang cmake pkg-config libfontconfig-dev \
+  libwayland-dev libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev \
+  libssl-dev libzstd-dev libvulkan1
+```
+
+To build only the CLI without GUI dependencies:
+
+```bash
+cargo build --locked --release --no-default-features --bin mhrise-save-converter
+```
+
+Run the full suite with `cargo test --locked --all-targets --all-features`. The `gui-render` integration test renders the production frontend through GPUI's Metal renderer and exercises input, tabs, advanced options, slot moves, and deletion confirmation/cancellation on macOS. It explicitly skips GPU rendering on other platforms; backend/controller tests still run there. Set `MHR_GUI_SCREENSHOTS` to an existing directory to save those real rendered frames. Optional `MHR_GUI_TEST_SAVE` and `MHR_GUI_TEST_STEAMID64` load a local read-only save fixture for captures; no paths or account IDs are built into the application.
 
 ## Character-slot management
 
@@ -45,7 +65,7 @@ For pirated PC copies using TENOKE, account configuration is in `<game directory
 
 These values were confirmed by successfully decrypting `data00-1.bin`, `data001Slot.bin`, and `data002Slot.bin`, checking every Citrus block, and parsing their class streams. They apply to this verified sample; other packages or modified account configurations may use different values. Album headers can provide candidate account IDs, but this sample also contained album files with a different ID, so successful core-file decryption is the deciding check.
 
-In the GUI, select the source `SteamData/win64_save` folder, choose a new output directory, set **Target** to **Steam**, and enter:
+In the GUI, select the source `SteamData/win64_save` folder, choose a new output directory, set **Convert to** to **Steam**, and enter:
 
 - **Source SteamID64:** `76561197960270388`
 - **Source Curve Index:** `93` (optional; detected automatically if blank)
