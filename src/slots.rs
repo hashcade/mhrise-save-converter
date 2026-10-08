@@ -90,6 +90,22 @@ pub fn swap_slots(
   options: SlotOptions,
 ) -> Result<Vec<PathBuf>> {
   validate_pair(first, second)?;
+  let mut order = [1, 2, 3];
+  order.swap(usize::from(first - 1), usize::from(second - 1));
+  reorder_slots(input, output, order, options)
+}
+
+/// Write all three destination slots in the requested original-slot order.
+/// For example, `[2, 3, 1]` moves original slot 2 to 1, 3 to 2, and 1 to 3.
+pub fn reorder_slots(
+  input: &Path,
+  output: &Path,
+  order: [u8; 3],
+  options: SlotOptions,
+) -> Result<Vec<PathBuf>> {
+  let mut sorted = order;
+  sorted.sort_unstable();
+  ensure!(sorted == [1, 2, 3], "slot order must contain each position 1–3 exactly once");
   let source = fs::canonicalize(input).context("could not resolve source directory")?;
   ensure_output_absent(output)?;
   let parent =
@@ -98,25 +114,29 @@ pub fn swap_slots(
   ensure!(!parent.starts_with(&source), "output must be outside the source save directory");
   let mut bundle = load_bundle(&source, options)?;
   ensure!(
-    bundle.inspection.slots[usize::from(first - 1)].occupied()
-      || bundle.inspection.slots[usize::from(second - 1)].occupied(),
-    "both selected slots are empty"
+    order.iter().enumerate().any(|(to, from)| {
+      usize::from(*from - 1) != to && bundle.inspection.slots[usize::from(*from - 1)].occupied()
+    }),
+    "slot order does not move any character"
   );
   let offset = class_stream_offset(bundle.inspection.platform);
   let mut expected = bundle.system.clone();
   let FieldValue::Array(hunters) = &mut field_mut(&mut expected, LOAD_INFO, HUNTERS)?.value else {
     bail!("hunter summaries are not an array");
   };
-  hunters.values.swap(usize::from(first - 1), usize::from(second - 1));
+  hunters.values = order.map(|from| hunters.values[usize::from(from - 1)].clone()).to_vec();
   if let Some(hashes) = &mut hunters.class_hashes {
-    hashes.swap(usize::from(first - 1), usize::from(second - 1));
+    *hashes = order.map(|from| hashes[usize::from(from - 1)]).to_vec();
   }
-  let system_plain = swap_summaries(&bundle.system_plain, &expected, offset, first, second)?;
+  let system_plain = reorder_summaries(&bundle.system_plain, &expected, offset, order)?;
   let system_bytes = repack(&system_plain, &bundle)?;
   bundle.files.insert(SYSTEM_FILE.to_owned(), system_bytes);
 
-  for (from, to) in [(first, second), (second, first)] {
-    if let Some((plain, role)) = bundle.roles.get(&from) {
+  for (index, from) in order.iter().copied().enumerate() {
+    let to = index as u8 + 1;
+    if from != to
+      && let Some((plain, role)) = bundle.roles.get(&from)
+    {
       let moved = move_role(plain, role, offset, from, to)?;
       let packed = repack(&moved, &bundle)?;
       // Retain the source name until the single simultaneous filename permutation below.
@@ -125,7 +145,7 @@ pub fn swap_slots(
   }
   let mut output_files = BTreeMap::new();
   for (name, bytes) in bundle.files {
-    let new_name = swapped_filename(&name, first, second);
+    let new_name = reordered_filename(&name, order);
     ensure!(
       output_files.insert(new_name, bytes).is_none(),
       "slot swap produced a filename collision"
@@ -354,46 +374,37 @@ fn move_role(plain: &[u8], role: &SavePayload, offset: usize, from: u8, to: u8) 
   Ok(patched)
 }
 
-fn swap_summaries(
+fn reorder_summaries(
   plain: &[u8],
   expected: &SavePayload,
   offset: usize,
-  first: u8,
-  second: u8,
+  order: [u8; 3],
 ) -> Result<Vec<u8>> {
   let ranges = array_ranges(plain, offset, &[LOAD_INFO, HUNTERS])?;
   ensure!(ranges.elements.len() == 3, "expected exactly three serialized summaries");
-  let first = usize::from(first - 1);
-  let second = usize::from(second - 1);
   let mut patched = plain[..ranges.elements[0].start].to_vec();
   if let Some(hashes) = &ranges.class_hashes {
-    let a = hashes.start + first * 4;
-    let b = hashes.start + second * 4;
-    patched[a..a + 4].copy_from_slice(&plain[b..b + 4]);
-    patched[b..b + 4].copy_from_slice(&plain[a..a + 4]);
+    for (to, from) in order.iter().enumerate() {
+      let a = hashes.start + to * 4;
+      let b = hashes.start + usize::from(*from - 1) * 4;
+      patched[a..a + 4].copy_from_slice(&plain[b..b + 4]);
+    }
   }
-  for index in 0..3 {
-    let from = if index == first {
-      second
-    } else if index == second {
-      first
-    } else {
-      index
-    };
-    patched.extend_from_slice(&plain[ranges.elements[from].clone()]);
+  for from in order {
+    patched.extend_from_slice(&plain[ranges.elements[usize::from(from - 1)].clone()]);
   }
   patched.extend_from_slice(&plain[ranges.elements[2].end..]);
   if SavePayload::parse_at_offset(&patched, offset).is_ok_and(|parsed| parsed == *expected) {
     return Ok(patched);
   }
-  // Relocation can require different padding. Re-encode only the two moved
+  // Relocation can require different padding. Re-encode only the moved
   // summaries, preserving the untouched summary and every surrounding byte.
   patched.truncate(ranges.elements[0].start);
   let FieldValue::Array(hunters) = &field(expected, LOAD_INFO, HUNTERS)?.value else {
     bail!("hunter summaries are not an array");
   };
   for (index, value) in hunters.values.iter().enumerate() {
-    if index == first || index == second {
+    if usize::from(order[index] - 1) != index {
       let ArrayValue::Class(class) = value else {
         bail!("hunter summary is not a class");
       };
@@ -429,8 +440,9 @@ fn role_filename(number: u8) -> String {
   format!("data{number:03}Slot.bin")
 }
 
-fn swapped_filename(name: &str, first: u8, second: u8) -> String {
-  for (from, to) in [(first, second), (second, first)] {
+fn reordered_filename(name: &str, order: [u8; 3]) -> String {
+  for (index, from) in order.iter().copied().enumerate() {
+    let to = index as u8 + 1;
     if name == role_filename(from) {
       return role_filename(to);
     }
@@ -556,8 +568,8 @@ mod tests {
         unreachable!()
       };
       array.values.swap(0, 2);
-      let patched = swap_summaries(&plain, &expected, offset, 1, 3).unwrap();
-      let restored = swap_summaries(&patched, &original, offset, 1, 3).unwrap();
+      let patched = reorder_summaries(&plain, &expected, offset, [3, 2, 1]).unwrap();
+      let restored = reorder_summaries(&patched, &original, offset, [3, 2, 1]).unwrap();
       assert_eq!(restored, plain);
     }
   }
@@ -569,17 +581,19 @@ mod tests {
         if first == second {
           continue;
         }
-        assert_eq!(swapped_filename(&role_filename(first), first, second), role_filename(second));
+        let mut order = [1, 2, 3];
+        order.swap(usize::from(first - 1), usize::from(second - 1));
+        assert_eq!(reordered_filename(&role_filename(first), order), role_filename(second));
         assert_eq!(
-          swapped_filename(&format!("SS{first}_data338Slot.bin"), first, second),
+          reordered_filename(&format!("SS{first}_data338Slot.bin"), order),
           format!("SS{second}_data338Slot.bin")
         );
         assert_eq!(
-          swapped_filename(&format!("SS{first}_data00-1.bin"), first, second),
+          reordered_filename(&format!("SS{first}_data00-1.bin"), order),
           format!("SS{second}_data00-1.bin")
         );
-        assert_eq!(swapped_filename("SS10_data001Slot.bin", first, second), "SS10_data001Slot.bin");
-        assert_eq!(swapped_filename("notes.txt", first, second), "notes.txt");
+        assert_eq!(reordered_filename("SS10_data001Slot.bin", order), "SS10_data001Slot.bin");
+        assert_eq!(reordered_filename("notes.txt", order), "notes.txt");
       }
     }
     assert!(validate_pair(0, 1).is_err());
@@ -635,7 +649,7 @@ mod tests {
       unreachable!()
     };
     array.values.swap(0, 1);
-    let patched = swap_summaries(&plain, &expected, 16, 1, 2).unwrap();
+    let patched = reorder_summaries(&plain, &expected, 16, [2, 1, 3]).unwrap();
     let before = array_ranges(&plain, 16, &[LOAD_INFO, HUNTERS]).unwrap();
     let after = array_ranges(&patched, 16, &[LOAD_INFO, HUNTERS]).unwrap();
     assert_eq!(&plain[before.elements[2].clone()], &patched[after.elements[2].clone()]);
@@ -802,6 +816,59 @@ mod tests {
           assert_eq!(&restored.roles[slot].0, plain);
         }
         assert_eq!(load_bundle(&source, options).unwrap().files, before.files);
+      }
+    }
+  }
+
+  #[test]
+  fn reorders_complete_bundles_and_albums_for_every_permutation() {
+    for platform in [TargetPlatform::Steam, TargetPlatform::NintendoSwitch] {
+      for occupied in [vec![1, 2, 3], vec![1, 2], vec![1]] {
+        let temp = TestDirectory::new();
+        let source = temp.0.join("source");
+        let options = fixture(&source, platform, &occupied);
+        let before = load_bundle(&source, options).unwrap();
+        for order in [[2, 1, 3], [1, 3, 2], [3, 2, 1], [2, 3, 1], [3, 1, 2]] {
+          let output = temp.0.join(format!("order{order:?}"));
+          let moved = order
+            .iter()
+            .enumerate()
+            .any(|(index, from)| usize::from(*from) != index + 1 && occupied.contains(from));
+          if !moved {
+            assert!(reorder_slots(&source, &output, order, options).is_err());
+            assert!(!output.exists());
+            continue;
+          }
+          reorder_slots(&source, &output, order, options).unwrap();
+          let after = load_bundle(&output, options).unwrap();
+          assert_eq!(after.files.len(), before.files.len());
+          let mut inverse = [0; 3];
+          for (index, from) in order.into_iter().enumerate() {
+            inverse[usize::from(from - 1)] = index as u8 + 1;
+            assert_eq!(
+              after.inspection.slots[index].name,
+              before.inspection.slots[usize::from(from - 1)].name
+            );
+          }
+          for (name, bytes) in &before.files {
+            if name.starts_with("SS") || name == "unrecognized-file.dat" {
+              assert_eq!(&after.files[&reordered_filename(name, order)], bytes);
+            }
+          }
+          let restored = temp.0.join(format!("restored{order:?}"));
+          reorder_slots(&output, &restored, inverse, options).unwrap();
+          let restored = load_bundle(&restored, options).unwrap();
+          assert_eq!(restored.system, before.system);
+          for (slot, (plain, _)) in &before.roles {
+            assert_eq!(&restored.roles[slot].0, plain);
+          }
+        }
+        assert_eq!(load_bundle(&source, options).unwrap().files, before.files);
+        for order in [[1, 1, 3], [0, 2, 3], [1, 2, 4], [1, 2, 3]] {
+          let output = temp.0.join(format!("invalid{order:?}"));
+          assert!(reorder_slots(&source, &output, order, options).is_err());
+          assert!(!output.exists());
+        }
       }
     }
   }
