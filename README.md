@@ -19,7 +19,7 @@ Required SteamID64 fields are visible in the main form; Switch inputs do not nee
 
 ### Platform and build requirements
 
-The GPUI frontend targets macOS 15+ (Apple Silicon and Intel), Windows 10+, and Linux with a Vulkan-capable graphics driver. These requirements apply to the new frontend in source; previously published v0.3.0 packages still use egui. The build and release workflows retain all four native targets.
+The GPUI frontend in v0.4.0 and later targets macOS 15+ (Apple Silicon and Intel), Windows 10+, and Linux with a Vulkan-capable graphics driver. Packages through v0.3.0 use egui and have different GUI requirements. The build and release workflows retain all four native targets.
 
 Source builds use the Rust toolchain pinned in `rust-toolchain.toml`. macOS needs Xcode Command Line Tools; Windows needs the MSVC C++ toolchain and CMake. On Ubuntu, install the native GUI dependencies:
 
