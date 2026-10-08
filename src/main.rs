@@ -67,7 +67,7 @@ enum Command {
     /// Existing target save used as a schema/default template and, for Steam, to detect its curve.
     #[arg(long)]
     target_reference: Option<PathBuf>,
-    /// Permit writing into an existing output directory or file.
+    /// Overwrite existing output files with the same names; unrelated files are kept.
     #[arg(long)]
     force: bool,
   },

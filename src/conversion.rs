@@ -1,6 +1,6 @@
 use std::{
   fs,
-  io::Read,
+  io::{Read, Write},
   path::{Path, PathBuf},
 };
 
@@ -11,7 +11,7 @@ use murmur3::murmur3_32;
 use crate::{
   crypto::Citrus,
   defaults::steam_template_from_source,
-  discover::{SaveFileKind, discover_save_files},
+  discover::{SaveFile, SaveFileKind, discover_save_files},
   format::{ChecksumStatus, DsssHeader, Platform, SaveFlags, checksum_status, parse_header},
   identity::resign_owner_identities,
   payload::SavePayload,
@@ -28,7 +28,7 @@ pub enum TargetPlatform {
   Steam,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversionRequest {
   pub target: TargetPlatform,
   pub source_steamid64: Option<u64>,
@@ -69,20 +69,14 @@ where
   let files = discover_save_files(input)?;
   let total = files.len();
   let output_is_directory = input.is_dir();
+  let conflicts =
+    find_output_conflicts(&files, input, output, request.target_reference.as_deref())?;
+  if !conflicts.is_empty() && !request.force {
+    bail!("{} output file(s) already exist; use --force to overwrite them", conflicts.len());
+  }
   if output_is_directory {
-    if output.exists() && !request.force {
-      let mut entries = fs::read_dir(output)?;
-      if entries.next().transpose()?.is_some() {
-        bail!(
-          "output directory {} is not empty; use --force to overwrite generated files",
-          output.display()
-        );
-      }
-    }
     fs::create_dir_all(output)
       .with_context(|| format!("could not create output directory {}", output.display()))?;
-  } else if output.exists() && !request.force {
-    bail!("output file {} already exists; use --force to overwrite it", output.display());
   } else if let Some(parent) = output.parent() {
     fs::create_dir_all(parent)?;
   }
@@ -137,7 +131,7 @@ where
       }
     }
     .with_context(|| format!("could not convert {}", file.path.display()))?;
-    fs::write(&output_path, converted)
+    write_converted_file(&output_path, &converted, options.force)
       .with_context(|| format!("could not write {}", output_path.display()))?;
     written.push(output_path);
     on_progress(ConversionProgress {
@@ -156,6 +150,71 @@ pub enum PreflightSeverity {
   Error,
 }
 
+fn write_converted_file(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
+  if !overwrite {
+    fs::OpenOptions::new().write(true).create_new(true).open(path)?.write_all(bytes)?;
+    return Ok(());
+  }
+  // Replace the directory entry, not the contents of a possibly hard-linked existing file.
+  let parent = path.parent().filter(|path| !path.as_os_str().is_empty()).unwrap_or(Path::new("."));
+  let staging = parent.join(format!(".mhrise-convert-{:016x}.tmp", rand::random::<u64>()));
+  let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&staging)?;
+  let result = file.write_all(bytes);
+  drop(file);
+  let result = result.and_then(|()| fs::rename(&staging, path));
+  if result.is_err() {
+    let _ = fs::remove_file(&staging);
+  }
+  result.context("could not replace converted output file")
+}
+
+fn find_output_conflicts(
+  files: &[SaveFile],
+  input: &Path,
+  output: &Path,
+  reference: Option<&Path>,
+) -> Result<Vec<PathBuf>> {
+  let directory = input.is_dir();
+  if output.exists() && directory && !output.is_dir() {
+    bail!("output must be a directory");
+  }
+  let mut conflicts = Vec::new();
+  for file in files {
+    let destination = if directory {
+      output.join(file.path.file_name().context("source file has no name")?)
+    } else {
+      output.to_path_buf()
+    };
+    match fs::symlink_metadata(&destination) {
+      Ok(metadata) => {
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+          bail!("output {} is not a regular file", destination.display());
+        }
+        let canonical = fs::canonicalize(&destination)?;
+        for source in files {
+          if canonical == fs::canonicalize(&source.path)? {
+            bail!("output must not overwrite source files");
+          }
+        }
+        if let Some(reference) = reference {
+          let template = if reference.is_dir() {
+            reference.join(file.path.file_name().context("source file has no name")?)
+          } else {
+            reference.to_path_buf()
+          };
+          if template.exists() && canonical == fs::canonicalize(template)? {
+            bail!("output must not overwrite target template files");
+          }
+        }
+        conflicts.push(destination);
+      }
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+      Err(error) => return Err(error).context("could not inspect output file"),
+    }
+  }
+  Ok(conflicts)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreflightIssue {
   pub severity: PreflightSeverity,
@@ -169,6 +228,7 @@ pub struct PreflightReport {
   pub core_file_count: usize,
   pub auxiliary_file_count: usize,
   pub target_reference_available: bool,
+  pub output_conflicts: Vec<PathBuf>,
   pub issues: Vec<PreflightIssue>,
 }
 
@@ -220,14 +280,15 @@ pub fn preflight_path(
       message: "output must be different from the source".to_owned(),
     });
   }
-  if output.exists()
-    && output.is_dir()
-    && !request.force
-    && fs::read_dir(output)?.next().transpose()?.is_some()
-  {
+  let output_conflicts =
+    find_output_conflicts(&files, input, output, request.target_reference.as_deref())?;
+  if !output_conflicts.is_empty() && !request.force {
     issues.push(PreflightIssue {
       severity: PreflightSeverity::Error,
-      message: "output directory is not empty; enable overwrite explicitly".to_owned(),
+      message: format!(
+        "{} output file(s) already exist; confirm overwrite first",
+        output_conflicts.len()
+      ),
     });
   }
 
@@ -283,6 +344,7 @@ pub fn preflight_path(
   }
 
   Ok(PreflightReport {
+    output_conflicts,
     source_platform,
     file_count: files.len(),
     core_file_count,
@@ -601,6 +663,110 @@ mod tests {
   use crate::payload::{Class, Field, FieldValue, NativeClass, SavePayload};
 
   const TEST_STEAM_ID: u64 = 76_561_198_382_766_028;
+
+  fn switch_request(force: bool) -> ConversionRequest {
+    ConversionRequest {
+      target: TargetPlatform::NintendoSwitch,
+      source_steamid64: None,
+      target_steamid64: None,
+      source_curve_index: None,
+      target_curve_index: None,
+      target_reference: None,
+      force,
+    }
+  }
+
+  #[test]
+  fn output_writes_do_not_truncate_linked_originals_or_unconfirmed_files() {
+    let root =
+      std::env::temp_dir().join(format!("mhrise-write-test-{:016x}", rand::random::<u64>()));
+    fs::create_dir(&root).unwrap();
+    let original = root.join("original.bin");
+    let destination = root.join("output.bin");
+    fs::write(&original, b"original save").unwrap();
+    fs::hard_link(&original, &destination).unwrap();
+    assert!(write_converted_file(&destination, b"new save", false).is_err());
+    assert_eq!(fs::read(&destination).unwrap(), b"original save");
+    write_converted_file(&destination, b"new save", true).unwrap();
+    assert_eq!(fs::read(&destination).unwrap(), b"new save");
+    assert_eq!(fs::read(&original).unwrap(), b"original save");
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 2, "no temporary files remain");
+    fs::remove_dir_all(root).unwrap();
+  }
+
+  #[test]
+  fn nonempty_output_allows_unrelated_files_but_requires_force_for_collisions() {
+    let root =
+      std::env::temp_dir().join(format!("mhrise-output-test-{:016x}", rand::random::<u64>()));
+    let source = root.join("source");
+    let output = root.join("output");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&output).unwrap();
+    let data = pack_payload(b"test save", TargetPlatform::NintendoSwitch, None, None).unwrap();
+    for name in ["data00-1.bin", "data001Slot.bin"] {
+      fs::write(source.join(name), &data).unwrap();
+    }
+    fs::write(output.join("notes.txt"), b"keep this").unwrap();
+    let report = preflight_path(&source, &output, &switch_request(false)).unwrap();
+    assert!(report.can_convert());
+    assert!(report.output_conflicts.is_empty());
+    assert_eq!(convert_path(&source, &output, switch_request(false)).unwrap().len(), 2);
+    assert_eq!(fs::read(output.join("notes.txt")).unwrap(), b"keep this");
+
+    fs::remove_file(output.join("data00-1.bin")).unwrap();
+    fs::write(output.join("data001Slot.bin"), b"existing save").unwrap();
+    let report = preflight_path(&source, &output, &switch_request(false)).unwrap();
+    assert!(!report.can_convert());
+    assert_eq!(report.output_conflicts, vec![output.join("data001Slot.bin")]);
+    assert!(convert_path(&source, &output, switch_request(false)).is_err());
+    assert!(
+      !output.join("data00-1.bin").exists(),
+      "reject every collision before writing any file"
+    );
+    assert_eq!(fs::read(output.join("data001Slot.bin")).unwrap(), b"existing save");
+    assert_eq!(convert_path(&source, &output, switch_request(true)).unwrap().len(), 2);
+    assert_eq!(fs::read(output.join("data001Slot.bin")).unwrap(), data);
+    assert_eq!(fs::read(output.join("notes.txt")).unwrap(), b"keep this");
+    assert_eq!(fs::read(source.join("data001Slot.bin")).unwrap(), data);
+    fs::remove_dir_all(root).unwrap();
+  }
+
+  #[test]
+  fn forced_conversion_never_overwrites_source_or_target_template() {
+    let root =
+      std::env::temp_dir().join(format!("mhrise-readonly-test-{:016x}", rand::random::<u64>()));
+    let source = root.join("source");
+    let template = root.join("template");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&template).unwrap();
+    let data = pack_payload(b"test save", TargetPlatform::NintendoSwitch, None, None).unwrap();
+    fs::write(source.join("data00-1.bin"), &data).unwrap();
+    fs::write(template.join("data00-1.bin"), &data).unwrap();
+    assert!(convert_path(&source, &source, switch_request(true)).is_err());
+    let request =
+      ConversionRequest { target_reference: Some(template.clone()), ..switch_request(true) };
+    assert!(convert_path(&source, &template, request).is_err());
+    assert_eq!(fs::read(source.join("data00-1.bin")).unwrap(), data);
+    assert_eq!(fs::read(template.join("data00-1.bin")).unwrap(), data);
+    fs::remove_dir_all(root).unwrap();
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn output_symlinks_are_not_overwritten_even_with_force() {
+    let root =
+      std::env::temp_dir().join(format!("mhrise-link-test-{:016x}", rand::random::<u64>()));
+    let source = root.join("source");
+    let output = root.join("output");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&output).unwrap();
+    let data = pack_payload(b"test save", TargetPlatform::NintendoSwitch, None, None).unwrap();
+    fs::write(source.join("data00-1.bin"), &data).unwrap();
+    std::os::unix::fs::symlink(source.join("data00-1.bin"), output.join("data00-1.bin")).unwrap();
+    assert!(convert_path(&source, &output, switch_request(true)).is_err());
+    assert_eq!(fs::read(source.join("data00-1.bin")).unwrap(), data);
+    fs::remove_dir_all(root).unwrap();
+  }
 
   #[test]
   fn platform_containers_roundtrip_preserve_payload() {
