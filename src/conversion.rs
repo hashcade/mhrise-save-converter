@@ -388,7 +388,7 @@ fn target_platform(target: TargetPlatform) -> Platform {
   }
 }
 
-fn class_stream_offset(platform: Platform) -> usize {
+pub(crate) fn class_stream_offset(platform: Platform) -> usize {
   match platform {
     Platform::NintendoSwitch => DSSS_HEADER_LEN,
     Platform::Steam => align_up(DSSS_HEADER_LEN, 16),
@@ -465,7 +465,7 @@ pub fn find_curve_index(path: &Path, steamid64: u64) -> Result<usize> {
   Ok(params.index as usize)
 }
 
-fn unpack_payload(
+pub(crate) fn unpack_payload(
   data: &[u8],
   header: DsssHeader,
   steamid64: Option<u64>,
@@ -519,7 +519,7 @@ fn citrus_payload(data: &[u8]) -> Result<(&[u8], usize)> {
   Ok((&data[payload_offset..size_offset], decrypted_len))
 }
 
-fn pack_payload(
+pub(crate) fn pack_payload(
   payload: &[u8],
   target: TargetPlatform,
   steamid64: Option<u64>,

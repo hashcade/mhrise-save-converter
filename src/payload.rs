@@ -82,7 +82,7 @@ impl SavePayload {
         break;
       }
       let native_hash = reader.read_u32().context("missing native-field hash")?;
-      if !reader.byte_array_paths.is_empty() {
+      if reader.tracks_paths() {
         reader.path.clear();
         reader.path.push(native_hash);
       }
@@ -121,6 +121,35 @@ pub(crate) fn byte_array_ranges(
   Ok(reader.byte_array_ranges)
 }
 
+pub(crate) fn field_ranges(
+  data: &[u8],
+  alignment_offset: usize,
+  paths: &[&[u32]],
+) -> Result<Vec<(usize, Range<usize>)>> {
+  let mut reader = Reader::new(data, alignment_offset);
+  reader.field_paths = paths;
+  SavePayload::read(&mut reader)?;
+  Ok(reader.field_ranges)
+}
+
+pub(crate) fn encode_class_at_offset(class: &Class, offset: usize) -> Result<Vec<u8>> {
+  let mut writer = Writer::new(offset);
+  write_class(&mut writer, class)?;
+  Ok(writer.finish())
+}
+
+pub(crate) struct ArrayRanges {
+  pub elements: Vec<Range<usize>>,
+  pub class_hashes: Option<Range<usize>>,
+}
+
+pub(crate) fn array_ranges(data: &[u8], offset: usize, path: &[u32]) -> Result<ArrayRanges> {
+  let mut reader = Reader::new(data, offset);
+  reader.array_path = Some(path);
+  SavePayload::read(&mut reader)?;
+  reader.array_ranges.context("selected array was not found")
+}
+
 fn read_class(reader: &mut Reader<'_>) -> Result<Class> {
   let field_count = reader.read_u32()? as usize;
   let hash = reader.read_u32()?;
@@ -140,7 +169,7 @@ fn read_field(reader: &mut Reader<'_>) -> Result<Field> {
   let offset = reader.position();
   let hash = reader.read_u32()?;
   let field_type = reader.read_i32()?;
-  if !reader.byte_array_paths.is_empty() {
+  if reader.tracks_paths() {
     reader.path.push(hash);
     if reader.selected_byte_array().is_some() && field_type != FIELD_TYPE_ARRAY {
       bail!("selected identity field {hash:08x} is not a byte array");
@@ -161,14 +190,20 @@ fn read_field(reader: &mut Reader<'_>) -> Result<Field> {
   .with_context(|| {
     format!("could not parse field {hash:08x} type {field_type} at offset {offset:#x}")
   })?;
-  if !reader.byte_array_paths.is_empty() {
+  reader.align(4)?;
+  if let Some(index) = reader.field_paths.iter().position(|path| *path == reader.path) {
+    reader.field_ranges.push((index, offset..reader.position()));
+  }
+  if reader.tracks_paths() {
     reader.path.pop();
   }
-  reader.align(4)?;
   Ok(Field { hash, field_type, value })
 }
 
 fn read_array(reader: &mut Reader<'_>) -> Result<Array> {
+  let locate_elements = reader.array_path.is_some_and(|path| path == reader.path);
+  let mut element_ranges = Vec::new();
+  let mut hash_range = None;
   reader.align(4)?;
   let member_type = reader.read_i32()?;
   let member_size = reader.read_u32()?;
@@ -181,9 +216,11 @@ fn read_array(reader: &mut Reader<'_>) -> Result<Array> {
   let class_hashes = if array_type == ARRAY_TYPE_CLASS && reader.peek_u32() == Some(ARRAY_MARKER) {
     reader.read_u32()?;
     let mut hashes = Vec::with_capacity(len);
+    let start = reader.position();
     for _ in 0..len {
       hashes.push(reader.read_u32()?);
     }
+    hash_range = Some(start..reader.position());
     Some(hashes)
   } else {
     None
@@ -198,6 +235,7 @@ fn read_array(reader: &mut Reader<'_>) -> Result<Array> {
 
   let mut values = Vec::with_capacity(len);
   for _ in 0..len {
+    let start = reader.position();
     let value = if array_type == ARRAY_TYPE_CLASS {
       ArrayValue::Class(Box::new(read_class(reader)?))
     } else {
@@ -208,11 +246,20 @@ fn read_array(reader: &mut Reader<'_>) -> Result<Array> {
       }
     };
     values.push(value);
+    if locate_elements {
+      element_ranges.push(start..reader.position());
+    }
   }
   if let Some(index) = selected {
     reader.byte_array_ranges.push((index, start..reader.position()));
   }
   reader.align(4)?;
+  if locate_elements {
+    if reader.array_ranges.is_some() {
+      bail!("selected array is duplicated");
+    }
+    reader.array_ranges = Some(ArrayRanges { elements: element_ranges, class_hashes: hash_range });
+  }
   Ok(Array { member_type, member_size, array_type, class_hashes, values })
 }
 
@@ -341,6 +388,10 @@ struct Reader<'a> {
   byte_array_paths: &'a [&'a [u32]],
   path: Vec<u32>,
   byte_array_ranges: Vec<(usize, Range<usize>)>,
+  field_paths: &'a [&'a [u32]],
+  field_ranges: Vec<(usize, Range<usize>)>,
+  array_path: Option<&'a [u32]>,
+  array_ranges: Option<ArrayRanges>,
 }
 
 impl<'a> Reader<'a> {
@@ -352,11 +403,19 @@ impl<'a> Reader<'a> {
       byte_array_paths: &[],
       path: Vec::new(),
       byte_array_ranges: Vec::new(),
+      field_paths: &[],
+      field_ranges: Vec::new(),
+      array_path: None,
+      array_ranges: None,
     }
   }
 
   fn selected_byte_array(&self) -> Option<usize> {
     self.byte_array_paths.iter().position(|path| *path == self.path)
+  }
+
+  fn tracks_paths(&self) -> bool {
+    !self.byte_array_paths.is_empty() || !self.field_paths.is_empty() || self.array_path.is_some()
   }
 
   fn remaining(&self) -> usize {

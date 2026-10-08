@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use mhrise_save_converter::{
   conversion::{ConversionRequest, TargetPlatform, convert_path, find_curve_index, verify_file},
   discover::{discover_core_files, discover_save_files},
+  slots::{SlotOptions, inspect_slots, swap_slots},
 };
 
 #[derive(Debug, Parser)]
@@ -16,6 +17,27 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+  /// List the three character slots without changing files.
+  Slots {
+    input: PathBuf,
+    #[arg(long)]
+    steamid64: Option<u64>,
+    #[arg(long)]
+    curve_index: Option<usize>,
+  },
+  /// Exchange two character slots and their albums into a new save directory.
+  SwapSlots {
+    input: PathBuf,
+    output: PathBuf,
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=3))]
+    first: u8,
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=3))]
+    second: u8,
+    #[arg(long)]
+    steamid64: Option<u64>,
+    #[arg(long)]
+    curve_index: Option<usize>,
+  },
   /// Inspect DSSS headers and integrity checks without changing files.
   Inspect {
     /// A save file or a win64_save directory.
@@ -79,6 +101,31 @@ fn main() -> Result<()> {
   let cli = Cli::parse();
 
   match cli.command {
+    Command::Slots { input, steamid64, curve_index } => {
+      let report = inspect_slots(&input, SlotOptions { steamid64, curve_index })?;
+      println!("Platform: {}", report.platform);
+      for slot in report.slots {
+        println!(
+          "Slot {}: {} | HR {} | MR {} | {}",
+          slot.number,
+          slot.name.as_deref().unwrap_or("Empty"),
+          slot.hunter_rank,
+          slot.master_rank,
+          slot.playtime()
+        );
+      }
+      Ok(())
+    }
+    Command::SwapSlots { input, output, first, second, steamid64, curve_index } => {
+      let written =
+        swap_slots(&input, &output, first, second, SlotOptions { steamid64, curve_index })?;
+      println!(
+        "Swapped slots {first} and {second}: {} files written to {}",
+        written.len(),
+        output.display()
+      );
+      Ok(())
+    }
     Command::Inspect { path } => inspect(&path),
     Command::Convert {
       input,
