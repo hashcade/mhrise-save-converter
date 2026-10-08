@@ -1,6 +1,6 @@
 # MHRise Save Converter
 
-Native GUI and library tooling for converting *Monster Hunter Rise* saves between Nintendo Switch and Steam formats.
+Native GUI and library tooling for converting *Monster Hunter Rise* saves between Nintendo Switch and Steam formats and managing character slots.
 
 > [!WARNING]
 > **Test status:** Nintendo Switch → Steam conversion has been tested and confirmed working. The updated Steam → Steam converter has passed real-file decryption, curve-point, integrity, and payload-preservation checks. In one migration, the user reported successful loading after an additional coordinated character-slot swap; that workaround is not part of normal conversion, and the updated converter's output without it has not been confirmed in-game. Steam → Nintendo Switch has not been tested yet. Always back up your saves first.
@@ -50,7 +50,7 @@ In the GUI, select the source `SteamData/win64_save` folder, choose a new output
 - **Source SteamID64:** `76561197960270388`
 - **Source Curve Index:** `93` (optional; detected automatically if blank)
 - **Target SteamID64:** the SteamID64 of the purchased-game account
-- **Template:** that account's own `win64_save` folder, created by launching and saving in the purchased game
+- **Target save:** that account's own `win64_save` folder, created by launching and saving in the purchased game; this is the conversion template, not the output folder
 - **Target Curve Index:** leave blank to detect it from the template; do not reuse the source value `93`
 
 Equivalent CLI command:

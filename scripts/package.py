@@ -49,6 +49,8 @@ def copy_required_files(target_dir: Path, package_dir: Path, target: str) -> Non
     if source.is_file():
       shutil.copy2(source, package_dir / filename)
 
+  shutil.copytree(PROJECT_ROOT / "docs", package_dir / "docs")
+
 
 def create_archive(package_dir: Path, output_dir: Path, target: str, version: str) -> Path:
   archive_stem = f"mhrise-save-converter-v{version}-{target}"

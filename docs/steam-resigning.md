@@ -7,7 +7,7 @@
 - **Stale owner identities:** same-platform conversion previously changed the encryption account while leaving the hunter's own network-record and guild-card identities bound to the source account. Resigning now updates only those two known fields, including the unfinalized IEEE CRC32 stored in big-endian order. Parsed field paths locate the byte ranges; no global SteamID search-and-replace or full payload reserialization is used. Missing, empty, and zero-initialized identities remain unchanged. Unexpected identity formats or account mismatches are rejected.
 - **Missing albums:** scanning only `SS1_*`, `SS4_*`, and `SS7_*` omitted 85 `SS2_*` files in the sample. Discovery now recognizes positive numeric `SS<group>_` prefixes followed by a supported core filename. Same-platform auxiliary conversion preserves the payload and its alignment padding byte for byte while updating the account wrapper and outer checksum.
 
-These changes apply to the shared conversion library used by both the GUI and CLI. There is no new troubleshooting UI or automatic character-slot reorder.
+These changes apply to the shared conversion library used by both the GUI and CLI. Normal conversion does not automatically reorder character slots. Manual reordering and confirmed deletion are separate operations in the GUI's **Manage slots** tab; they are not an automatic fix for loading errors.
 
 ## Verification
 

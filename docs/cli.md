@@ -35,7 +35,9 @@ mhrise-save swap-slots /path/to/win64_save /path/to/new-swapped-save \
 
 Slot numbers are 1–3. An occupied/empty exchange moves the character; two empty slots or the same slot are rejected. `--curve-index` optionally overrides automatic Steam curve detection. A target template is not required.
 
-The output directory must not already exist, its parent must exist, and it must be outside the source directory. There is no `--force` option for slot swaps. Character albums move with their owner; unsupported regular files are copied unchanged. The bundle is verified before publishing the output. Back up the original save and test the output with Steam Cloud disabled. Deletion is not supported.
+The output directory must not already exist, its parent must exist, and it must be outside the source directory. There is no `--force` option for slot swaps. Each character's `SSN_` album/metadata namespace moves with its owner without changing file bytes; unrelated regular files are copied unchanged. The bundle is verified before publishing the output. Back up the original save and test the output with Steam Cloud disabled.
+
+The CLI currently supports inspection and pairwise swaps only. For repeated reordering or confirmed character deletion, use the GUI's **Manage slots** tab. Deletion marks a position empty without automatically shifting the remaining characters and applies only when **Save slots** writes a new output bundle. See [Character-slot management](../README.md#character-slot-management) for validation and safety limits.
 
 ## Switch → Steam
 
