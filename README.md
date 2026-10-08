@@ -53,42 +53,22 @@ SteamID64 is the account's 17-digit numeric Steam identifier, not a display name
 
 The supported file layout and container details are documented in [docs/save-structure.md](docs/save-structure.md).
 
-### Fixed-account PC save → purchased Steam account
+### Fixed-account PC saves
 
 For pirated PC copies using TENOKE, account configuration is in `<game directory>/tenoke.ini`; saves may be under `<game directory>/SteamData/win64_save`. Check the actual configuration rather than assuming a fixed SteamID64.
 
-| Source setting | Verified value |
-| --- | --- |
-| SteamID64 | `76561197960270388` |
-| AccountID (low 32 bits) | `4660` / `0x1234` |
-| Citrus Curve Index | `93` |
+## Development and releases
 
-These values were confirmed by successfully decrypting `data00-1.bin`, `data001Slot.bin`, and `data002Slot.bin`, checking every Citrus block, and parsing their class streams. They apply to this verified sample; other packages or modified account configurations may use different values. Album headers can provide candidate account IDs, but this sample also contained album files with a different ID, so successful core-file decryption is the deciding check.
+Pushes to `main` and pull requests run CI and four-platform packaging; documentation-only changes skip both. New runs cancel outdated CI/Build runs for the same ref. Version tags run only Release, which shares each platform's Rust dependency cache with Build. The release script's `chore: release v...` version-only commit still runs CI but skips Build, leaving packaging to Release. Releases are not cancelled by ordinary commits.
 
-In the GUI, select the source `SteamData/win64_save` folder, choose a new output directory, set **Convert to** to **Steam**, and enter:
-
-- **Source SteamID64:** `76561197960270388`
-- **Source Curve Index:** `93` (optional; detected automatically if blank)
-- **Target SteamID64:** the SteamID64 of the purchased-game account
-- **Target save:** that account's own `win64_save` folder, created by launching and saving in the purchased game; this is the conversion template, not the output folder
-- **Target Curve Index:** leave blank to detect it from the template; do not reuse the source value `93`
-
-Equivalent CLI command:
+Publish from a clean, up-to-date `main` checkout on macOS or Linux with Bash, Git, and Rust:
 
 ```bash
-mhrise-save convert /path/to/SteamData/win64_save /path/to/new-steam-save \
-  --to steam \
-  --source-steamid64 76561197960270388 \
-  --source-curve-index 93 \
-  --target-steamid64 <TARGET_STEAMID64> \
-  --target-reference /path/to/purchased-account/win64_save
+./tools/release.sh --bump patch --yes
+./tools/release.sh --bump minor --yes
 ```
 
-Exit the game, back up the destination save, and disable Steam Cloud while installing and testing the output. The destination path normally uses the account's **32-bit AccountID**, not its full SteamID64: `<Steam directory>/userdata/<AccountID>/1446780/remote/win64_save`.
-
-**Albums:** the GUI/CLI includes numeric `SS<group>_` auxiliary files, including this sample's 85 `SS2_*` files and three `SS1_*` files. Steam → Steam album conversion updates the AccountID wrapper and outer checksum without reserializing the payload or its padding. Cross-platform album conversion still realigns the class stream for the destination wrapper. Copying Steam album files unchanged does not update their account ID.
-
-**Owner identity:** Steam → Steam conversion also updates the hunter's own network-record and guild-card Steam identity blobs, including their BinaryInfo CRCs. Empty identities stay empty; other hunters' guild cards are untouched. All other core payload bytes, including slot metadata, GUIDs, statistics, progress, and padding, remain unchanged. Unsupported or mismatched owner identities are rejected rather than guessed. See [Steam resigning findings](docs/steam-resigning.md) for the fixes and remaining limitations.
+Run only one command for the intended version increment. With no arguments, the script proposes a patch bump and asks for confirmation. `--current` publishes the existing package version without bumping it; existing tags are rejected. The script checks the CLI, updates `Cargo.toml`/`Cargo.lock`, commits the version bump, pushes `main`, and pushes an annotated tag. GitHub Actions builds and verifies the four release packages. Local publishing no longer needs Python; CI packaging still uses `scripts/package.py`.
 
 ## Credits
 
