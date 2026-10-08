@@ -20,7 +20,7 @@ type SlotInputKey = (String, String, String);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GuiMode {
   Convert,
-  SwapSlots,
+  ManageSlots,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -457,7 +457,7 @@ impl GuiApp {
       ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         for (mode, label) in
-          [(GuiMode::Convert, "Convert save"), (GuiMode::SwapSlots, "Swap slots")]
+          [(GuiMode::Convert, "Convert save"), (GuiMode::ManageSlots, "Manage slots")]
         {
           let selected = self.mode == mode;
           let color =
@@ -762,7 +762,7 @@ impl eframe::App for GuiApp {
                   input_width,
                 );
               }
-              if self.mode == GuiMode::SwapSlots {
+              if self.mode == GuiMode::ManageSlots {
                 Self::render_form_label(ui, "Output folder");
                 Self::render_text_input(
                   ui,
@@ -802,7 +802,7 @@ impl eframe::App for GuiApp {
           );
 
           ui.add_space(12.0);
-          if self.mode == GuiMode::SwapSlots {
+          if self.mode == GuiMode::ManageSlots {
             self.render_slot_controls(ui, input_width);
           } else {
             self.render_conversion_options(ui, input_width);
@@ -813,24 +813,24 @@ impl eframe::App for GuiApp {
             egui::vec2(ui.available_width(), FORM_ROW_HEIGHT),
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-              let swapping = self.mode == GuiMode::SwapSlots;
+              let managing_slots = self.mode == GuiMode::ManageSlots;
               if ui
                 .add_enabled(
-                  self.worker.is_none() && (!swapping || self.can_save_slots()),
-                  egui::Button::new(if swapping {
+                  self.worker.is_none() && (!managing_slots || self.can_save_slots()),
+                  egui::Button::new(if managing_slots {
                     "Save slots".to_owned()
                   } else {
                     "Convert save".to_owned()
                   }),
                 )
-                .on_hover_text(if swapping {
+                .on_hover_text(if managing_slots {
                   "Saves the displayed slot order to a new directory without modifying the source."
                 } else {
                   "Checks the save first, then converts it."
                 })
                 .clicked()
               {
-                if swapping {
+                if managing_slots {
                   self.save_slot_order();
                 } else {
                   self.start_conversion(None);
@@ -1111,7 +1111,7 @@ mod tests {
               .shapes
               .iter()
               .find_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Text(text) if text.galley.job.text == "Swap slots" => {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == "Manage slots" => {
                   Some(text)
                 }
                 _ => None,
@@ -1120,7 +1120,7 @@ mod tests {
             target = text.pos + text.galley.size() / 2.0;
           }
         }
-        assert_eq!(app.mode, if busy { GuiMode::Convert } else { GuiMode::SwapSlots });
+        assert_eq!(app.mode, if busy { GuiMode::Convert } else { GuiMode::ManageSlots });
       }
     }
   }

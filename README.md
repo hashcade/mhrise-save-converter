@@ -17,9 +17,9 @@ Choose a source save, an output directory, and the target platform. For Steam co
 
 Required SteamID64 fields are visible in the main form; Switch inputs do not need an ID. Advanced options contain only Curve Index overrides. Conversion can write into an existing non-empty directory without changing unrelated files. If generated filenames already exist, the GUI lists the conflicts and asks for confirmation before writing. Cancelling leaves the existing files unchanged.
 
-## Character-slot swap
+## Character-slot management
 
-Open the **Swap slots** tab to manage slots independently of conversion. Choose the complete source save folder and a new, nonexistent output folder. For Steam, enter the current account's SteamID64; the Curve Index is detected automatically. Choose **Read save** to display all three slots. Use the **↑ / ↓** buttons on a character's row to exchange it with the adjacent position, including an empty slot. The table previews the resulting order; you can move characters repeatedly before choosing **Save slots** to write that order. The source folder stays unchanged.
+Open the **Manage slots** tab to manage slots independently of conversion. Choose the complete source save folder and a new, nonexistent output folder. For Steam, enter the current account's SteamID64; the Curve Index is detected automatically. Choose **Read save** to display all three slots. Use the **↑ / ↓** buttons on a character's row to exchange it with the adjacent position, including an empty slot. The table previews the resulting order; you can move characters repeatedly before choosing **Save slots** to write that order. The source folder stays unchanged.
 
 The operation coordinates system summaries, character filenames and internal slot metadata, and album prefixes. It keeps the same account and platform, copies other regular files unchanged, and does not edit the original save. Existing output directories, incomplete or inconsistent bundles, and subdirectories/symlinks are rejected. Clicking the output Browse button selects a parent directory and proposes a new `swapped-save` subfolder.
 
