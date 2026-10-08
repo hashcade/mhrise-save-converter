@@ -2,7 +2,7 @@
 name = "mhrise-save-converter"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.92"
 description = "A CLI for inspecting and converting Monster Hunter Rise save containers."
 license = "MIT"
 readme = "README.md"
@@ -17,19 +17,35 @@ bitflags = "2.9"
 cbc = "0.2"
 clap = { version = "4.5", features = ["derive"] }
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+gpui-kit = { version = "=0.7.1", optional = true }
 hex-literal = "1.0"
 murmur3 = "0.5"
 num-bigint = { version = "0.4", features = ["serde"] }
 num-integer = "0.1"
 num-traits = "0.2"
 rand = "0.10"
-rfd = "0.15"
+rfd = { version = "0.15", optional = true }
 sha3 = "0.11"
 thiserror = "2.0"
 
 [dev-dependencies]
 assert_cmd = "2.0"
+
+[features]
+default = ["gui"]
+gui = ["dep:gpui-kit", "dep:rfd"]
+gui-test = ["gui", "gpui-kit/test-support"]
+
+[[bin]]
+name = "mhrise-save-converter-gui"
+path = "src/bin/mhrise-save-converter-gui.rs"
+required-features = ["gui"]
+
+[[test]]
+name = "gui-render"
+path = "tests/gui-render.rs"
+harness = false
+required-features = ["gui-test"]
 
 [profile.release]
 lto = "thin"
