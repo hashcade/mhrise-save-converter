@@ -19,7 +19,7 @@ Required SteamID64 fields are visible in the main form; Switch inputs do not nee
 
 ## Character-slot swap
 
-Open the **Swap slots** tab to manage slots independently of conversion. Choose the complete source save folder and a new, nonexistent output folder. For Steam, enter the current account's SteamID64; the Curve Index is detected automatically. Choose **Read save** to display all three slots. In the table, select the character in **Move character** and its target position in **Destination**. An empty destination produces a **Move to slot N** action and leaves the original position empty; an occupied destination exchanges the two characters instead.
+Open the **Swap slots** tab to manage slots independently of conversion. Choose the complete source save folder and a new, nonexistent output folder. For Steam, enter the current account's SteamID64; the Curve Index is detected automatically. Choose **Read save** to display all three slots. Use the **↑ / ↓** buttons on a character's row to exchange it with the adjacent position, including an empty slot. The table previews the resulting order; you can move characters repeatedly before choosing **Save slots** to write that order. The source folder stays unchanged.
 
 The operation coordinates system summaries, character filenames and internal slot metadata, and album prefixes. It keeps the same account and platform, copies other regular files unchanged, and does not edit the original save. Existing output directories, incomplete or inconsistent bundles, and subdirectories/symlinks are rejected. Clicking the output Browse button selects a parent directory and proposes a new `swapped-save` subfolder.
 

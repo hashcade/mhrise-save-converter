@@ -13,7 +13,7 @@ use mhrise_save_converter::conversion::{
   ConversionProgress, ConversionRequest, PreflightReport, TargetPlatform,
   convert_path_with_progress, preflight_path,
 };
-use mhrise_save_converter::slots::{SlotInspection, SlotOptions, inspect_slots, swap_slots};
+use mhrise_save_converter::slots::{SlotInspection, SlotOptions, inspect_slots, reorder_slots};
 
 type SlotInputKey = (String, String, String);
 
@@ -61,8 +61,7 @@ pub struct GuiApp {
   mode: GuiMode,
   slots: Option<SlotInspection>,
   slots_key: Option<SlotInputKey>,
-  first_slot: u8,
-  second_slot: u8,
+  slot_order: [u8; 3],
   source: String,
   output: String,
   target_reference: String,
@@ -86,8 +85,7 @@ impl Default for GuiApp {
       mode: GuiMode::Convert,
       slots: None,
       slots_key: None,
-      first_slot: 1,
-      second_slot: 2,
+      slot_order: [1, 2, 3],
       source: String::new(),
       output: String::new(),
       target_reference: String::new(),
@@ -172,14 +170,32 @@ impl GuiApp {
     })
   }
 
-  fn can_swap(&self) -> bool {
-    (1..=3).contains(&self.first_slot)
-      && (1..=3).contains(&self.second_slot)
-      && self.first_slot != self.second_slot
-      && self.slots_key.as_ref() == Some(&self.slot_input_key())
+  fn can_save_slots(&self) -> bool {
+    self.slots_key.as_ref() == Some(&self.slot_input_key())
       && self.slots.as_ref().is_some_and(|report| {
-        report.slots.iter().any(|slot| slot.number == self.first_slot && slot.occupied())
+        self.slot_order.iter().enumerate().any(|(index, from)| {
+          usize::from(*from) != index + 1
+            && report.slots.iter().any(|slot| slot.number == *from && slot.occupied())
+        })
       })
+  }
+
+  fn move_slot(&mut self, index: usize, up: bool) {
+    if self.worker.is_some() || self.slots_key.as_ref() != Some(&self.slot_input_key()) {
+      return;
+    }
+    let Some(from) = self.slot_order.get(index) else { return };
+    if !self
+      .slots
+      .as_ref()
+      .is_some_and(|report| report.slots.iter().any(|slot| slot.number == *from && slot.occupied()))
+    {
+      return;
+    }
+    let adjacent = if up { index.checked_sub(1) } else { index.checked_add(1) };
+    if let Some(adjacent) = adjacent.filter(|other| *other < self.slot_order.len()) {
+      self.slot_order.swap(index, adjacent);
+    }
   }
 
   fn load_slots(&mut self) {
@@ -201,6 +217,7 @@ impl GuiApp {
     let (sender, receiver) = mpsc::channel();
     self.slots = None;
     self.slots_key = None;
+    self.slot_order = [1, 2, 3];
     self.preflight = None;
     self.progress = None;
     self.output_directory = None;
@@ -212,14 +229,11 @@ impl GuiApp {
     });
   }
 
-  fn start_swap(&mut self) {
+  fn save_slot_order(&mut self) {
     let prepared = (|| {
       let (source, output) = self.paths()?;
-      if !self.can_swap() {
-        return Err(
-          "Read the current save, select a character, and choose a different destination slot."
-            .to_owned(),
-        );
+      if !self.can_save_slots() {
+        return Err("Read the current save and move a character before saving.".to_owned());
       }
       Ok((source, output, self.slot_options()?))
     })();
@@ -230,17 +244,16 @@ impl GuiApp {
         return;
       }
     };
-    let first = self.first_slot;
-    let second = self.second_slot;
+    let order = self.slot_order;
     let (sender, receiver) = mpsc::channel();
     self.preflight = None;
     self.progress = None;
     self.output_directory = Some(output.clone());
-    self.status = format!("Swapping slots {first} and {second}…");
+    self.status = "Saving slot order…".to_owned();
     self.worker = Some(receiver);
     thread::spawn(move || {
       let result =
-        swap_slots(&source, &output, first, second, options).map_err(|error| format!("{error:#}"));
+        reorder_slots(&source, &output, order, options).map_err(|error| format!("{error:#}"));
       let _ = sender.send(WorkerEvent::Finished(result));
     });
   }
@@ -374,17 +387,7 @@ impl GuiApp {
           }
           match result {
             Ok(report) => {
-              if !report.slots.iter().any(|slot| slot.number == self.first_slot && slot.occupied())
-              {
-                self.first_slot =
-                  report.slots.iter().find(|slot| slot.occupied()).map_or(1, |slot| slot.number);
-              }
-              self.second_slot = report
-                .slots
-                .iter()
-                .find(|slot| slot.number != self.first_slot && !slot.occupied())
-                .or_else(|| report.slots.iter().find(|slot| slot.number != self.first_slot))
-                .map_or(2, |slot| slot.number);
+              self.slot_order = [1, 2, 3];
               self.status.clear();
               self.slots = Some(report);
               self.slots_key = Some(key);
@@ -635,6 +638,7 @@ impl GuiApp {
     if self.slots_key.as_ref().is_some_and(|key| key != &self.slot_input_key()) {
       self.slots = None;
       self.slots_key = None;
+      self.slot_order = [1, 2, 3];
     }
     ui.add_space(8.0);
     if ui.add_enabled(self.worker.is_none(), egui::Button::new("Read save")).clicked() {
@@ -642,21 +646,23 @@ impl GuiApp {
     }
     ui.add_space(16.0);
     let Some(report) = &self.slots else {
-      ui.weak("Read a save to view and select its three character slots.");
+      ui.weak("Read a save to view its three slots.");
       return;
     };
+    let mut movement = None;
     egui::Grid::new("character_slots")
-      .num_columns(5)
+      .num_columns(4)
       .min_col_width(32.0)
       .spacing([12.0, 12.0])
       .striped(true)
       .show(ui, |ui| {
-        for title in ["Slot", "Character", "Progress", "Move character", "Destination"] {
+        for title in ["Slot", "Character", "Progress", "Move"] {
           ui.strong(title);
         }
         ui.end_row();
-        for slot in &report.slots {
-          ui.label(format!("Slot {}", slot.number));
+        for (index, from) in self.slot_order.iter().enumerate() {
+          let slot = &report.slots[usize::from(*from - 1)];
+          ui.label(format!("Slot {}", index + 1));
           ui.allocate_ui_with_layout(
             egui::vec2(160.0, FORM_ROW_HEIGHT),
             egui::Layout::left_to_right(egui::Align::Center),
@@ -679,49 +685,26 @@ impl GuiApp {
               }
             },
           );
-          if ui
-            .add_enabled(
-              self.worker.is_none() && slot.occupied(),
-              egui::RadioButton::new(self.first_slot == slot.number, "Select"),
-            )
-            .on_hover_text("Select this character to move")
-            .clicked()
-          {
-            select_character(&mut self.first_slot, &mut self.second_slot, slot.number);
-          }
-          if ui
-            .add_enabled(
-              self.worker.is_none() && slot.number != self.first_slot,
-              egui::RadioButton::new(self.second_slot == slot.number, "Here"),
-            )
-            .on_hover_text("Move to an empty slot, or exchange with its current character")
-            .clicked()
-          {
-            self.second_slot = slot.number;
-          }
+          ui.horizontal(|ui| {
+            for (up, label, available) in [(true, "↑", index > 0), (false, "↓", index < 2)] {
+              if ui
+                .add_enabled(
+                  self.worker.is_none() && slot.occupied() && available,
+                  egui::Button::new(label).min_size(egui::vec2(28.0, FORM_ROW_HEIGHT)),
+                )
+                .on_hover_text(if up { "Move up" } else { "Move down" })
+                .clicked()
+              {
+                movement = Some((index, up));
+              }
+            }
+          });
           ui.end_row();
         }
       });
-  }
-}
-
-fn destination_is_empty(report: &SlotInspection, number: u8) -> bool {
-  report.slots.iter().any(|slot| slot.number == number && !slot.occupied())
-}
-
-fn select_character(first: &mut u8, second: &mut u8, number: u8) {
-  let previous = *first;
-  *first = number;
-  if *second == number {
-    *second = previous;
-  }
-}
-
-fn swap_button_label(report: Option<&SlotInspection>, first: u8, second: u8) -> String {
-  if report.is_some_and(|report| destination_is_empty(report, second)) {
-    format!("Move to slot {second}")
-  } else {
-    format!("Swap slots {first} and {second}")
+    if let Some((index, up)) = movement {
+      self.move_slot(index, up);
+    }
   }
 }
 
@@ -820,22 +803,22 @@ impl eframe::App for GuiApp {
               let swapping = self.mode == GuiMode::SwapSlots;
               if ui
                 .add_enabled(
-                  self.worker.is_none() && (!swapping || self.can_swap()),
+                  self.worker.is_none() && (!swapping || self.can_save_slots()),
                   egui::Button::new(if swapping {
-                    swap_button_label(self.slots.as_ref(), self.first_slot, self.second_slot)
+                    "Save slots".to_owned()
                   } else {
                     "Convert save".to_owned()
                   }),
                 )
                 .on_hover_text(if swapping {
-                  "Saves the coordinated swap to a new directory without modifying the source."
+                  "Saves the displayed slot order to a new directory without modifying the source."
                 } else {
                   "Checks the save first, then converts it."
                 })
                 .clicked()
               {
                 if swapping {
-                  self.start_swap();
+                  self.save_slot_order();
                 } else {
                   self.start_conversion(None);
                 }
@@ -1212,9 +1195,9 @@ mod tests {
   }
 
   #[test]
-  fn swap_requires_fresh_inspection_and_at_least_one_occupied_slot() {
+  fn saving_requires_fresh_inspection_and_a_moved_character() {
     let mut app = GuiApp::default();
-    assert!(!app.can_swap());
+    assert!(!app.can_save_slots());
     app.slots = Some(SlotInspection {
       platform: mhrise_save_converter::format::Platform::Steam,
       curve_index: Some(67),
@@ -1229,20 +1212,17 @@ mod tests {
         .collect(),
     });
     app.slots_key = Some(app.slot_input_key());
-    assert!(app.can_swap());
-    app.second_slot = 1;
-    assert!(!app.can_swap());
-    app.first_slot = 2;
-    app.second_slot = 3;
-    assert!(!app.can_swap());
-    app.first_slot = 1;
-    assert!(app.can_swap());
+    assert!(!app.can_save_slots());
+    app.slot_order = [1, 3, 2];
+    assert!(!app.can_save_slots());
+    app.slot_order = [3, 2, 1];
+    assert!(app.can_save_slots());
     app.source = "changed".to_owned();
-    assert!(!app.can_swap());
+    assert!(!app.can_save_slots());
   }
 
   #[test]
-  fn slot_three_is_a_visible_destination_and_changes_action_to_move() {
+  fn arrows_preview_movement_into_slot_three_without_radio_selections() {
     let report = SlotInspection {
       platform: mhrise_save_converter::format::Platform::Steam,
       curve_index: Some(67),
@@ -1256,12 +1236,11 @@ mod tests {
         })
         .collect(),
     };
-    let mut app =
-      GuiApp { slots: Some(report.clone()), first_slot: 2, second_slot: 3, ..GuiApp::default() };
+    let mut app = GuiApp { slots: Some(report), ..GuiApp::default() };
     app.slots_key = Some(app.slot_input_key());
-    assert!(app.can_swap());
-    assert_eq!(swap_button_label(Some(&report), 2, 3), "Move to slot 3");
-    assert_eq!(swap_button_label(Some(&report), 2, 1), "Swap slots 2 and 1");
+    app.move_slot(1, false);
+    assert_eq!(app.slot_order, [1, 3, 2]);
+    assert!(app.can_save_slots());
     let context = egui::Context::default();
     let output = context.run(egui::RawInput::default(), |ctx| {
       egui::CentralPanel::default().show(ctx, |ui| app.render_slot_controls(ui, 300.0));
@@ -1274,26 +1253,145 @@ mod tests {
         _ => None,
       })
       .collect();
-    for label in ["Slot 1", "Slot 2", "Slot 3", "Empty"] {
+    for label in ["Slot 1", "Slot 2", "Slot 3", "Empty", "↑", "↓"] {
       assert!(labels.contains(&label), "the table must show {label}");
     }
+    for removed in ["Select", "Here", "Move character", "Destination"] {
+      assert!(!labels.contains(&removed));
+    }
+    let position = |label: &str| {
+      output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+          egui::epaint::Shape::Text(text) if text.galley.job.text == label => Some(text.pos.y),
+          _ => None,
+        })
+        .unwrap()
+    };
+    assert!(position("Hunter 1") < position("Empty"));
+    assert!(position("Empty") < position("Hunter 2"));
     assert!(!labels.iter().any(|label| label.starts_with("Select the character")
       || label.starts_with("Move:")
       || label.starts_with("Exchange:")
       || label.contains("albums")
       || label.contains("original files")));
-    app.first_slot = 3;
-    app.second_slot = 2;
-    assert!(!app.can_swap(), "an empty slot cannot be selected as the character to move");
+    app.move_slot(1, true);
+    assert_eq!(app.slot_order, [1, 3, 2], "empty rows cannot initiate movement");
   }
 
   #[test]
-  fn choosing_destination_character_keeps_two_different_positions() {
-    let mut app = GuiApp::default();
-    select_character(&mut app.first_slot, &mut app.second_slot, 2);
-    assert_eq!((app.first_slot, app.second_slot), (2, 1));
-    app.second_slot = 3;
-    select_character(&mut app.first_slot, &mut app.second_slot, 1);
-    assert_eq!((app.first_slot, app.second_slot), (1, 3));
+  fn clicking_down_arrow_reorders_the_preview_in_both_themes() {
+    for visuals in [egui::Visuals::light(), egui::Visuals::dark()] {
+      let context = egui::Context::default();
+      context.set_visuals(visuals);
+      let mut app = GuiApp {
+        slots: Some(SlotInspection {
+          platform: Platform::NintendoSwitch,
+          curve_index: None,
+          slots: (1..=3)
+            .map(|number| mhrise_save_converter::slots::SlotSummary {
+              number,
+              name: (number != 3).then(|| format!("Hunter {number}")),
+              hunter_rank: 1,
+              master_rank: 1,
+              playtime_seconds: 34.0,
+            })
+            .collect(),
+        }),
+        ..GuiApp::default()
+      };
+      app.slots_key = Some(app.slot_input_key());
+      let mut target = egui::Pos2::ZERO;
+      for frame in 0..4 {
+        let events = match frame {
+          2 => vec![
+            egui::Event::PointerMoved(target),
+            egui::Event::PointerButton {
+              pos: target,
+              button: egui::PointerButton::Primary,
+              pressed: true,
+              modifiers: egui::Modifiers::NONE,
+            },
+          ],
+          3 => vec![egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+          }],
+          _ => Vec::new(),
+        };
+        let output = context.run(
+          egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+              egui::Pos2::ZERO,
+              egui::vec2(680.0, 520.0),
+            )),
+            events,
+            ..Default::default()
+          },
+          |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.render_slot_controls(ui, 300.0));
+          },
+        );
+        if frame < 2 {
+          let text = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+              egui::epaint::Shape::Text(text) if text.galley.job.text == "↓" => Some(text),
+              _ => None,
+            })
+            .nth(1)
+            .expect("the second row has a down arrow");
+          target = text.pos + text.galley.size() / 2.0;
+        }
+      }
+      assert_eq!(app.slot_order, [1, 3, 2]);
+      assert!(app.can_save_slots());
+      assert!(app.worker.is_none(), "arrows only preview; saving starts the writer");
+    }
+  }
+
+  #[test]
+  fn repeated_arrow_moves_support_cycles_and_return_to_original_order() {
+    let mut app = GuiApp {
+      slots: Some(SlotInspection {
+        platform: Platform::Steam,
+        curve_index: Some(67),
+        slots: (1..=3)
+          .map(|number| mhrise_save_converter::slots::SlotSummary {
+            number,
+            name: Some(format!("Hunter {number}")),
+            hunter_rank: 1,
+            master_rank: 1,
+            playtime_seconds: 0.0,
+          })
+          .collect(),
+      }),
+      ..GuiApp::default()
+    };
+    app.slots_key = Some(app.slot_input_key());
+    app.move_slot(0, true);
+    app.move_slot(2, false);
+    app.move_slot(usize::MAX, false);
+    assert_eq!(app.slot_order, [1, 2, 3]);
+    app.move_slot(0, false);
+    app.move_slot(1, false);
+    assert_eq!(app.slot_order, [2, 3, 1]);
+    assert!(app.can_save_slots());
+    app.move_slot(2, true);
+    app.move_slot(1, true);
+    assert_eq!(app.slot_order, [1, 2, 3]);
+    assert!(!app.can_save_slots());
+    app.source = "changed".to_owned();
+    app.move_slot(0, false);
+    assert_eq!(app.slot_order, [1, 2, 3]);
+    app.slots_key = Some(app.slot_input_key());
+    let (_sender, receiver) = mpsc::channel();
+    app.worker = Some(receiver);
+    app.move_slot(0, false);
+    assert_eq!(app.slot_order, [1, 2, 3]);
   }
 }
