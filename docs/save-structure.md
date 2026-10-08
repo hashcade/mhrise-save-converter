@@ -28,4 +28,4 @@ System hunter summaries, character filenames, internal slot metadata, and album 
 
 Deleting a character excludes its role file and slot-associated namespace from the new bundle and replaces its system summary with a complete empty summary. Other characters do not automatically shift. A source empty summary is reused when available; otherwise, only recognized layouts compatible with the built-in 16.0.2.0 empty summary are accepted. Unrelated parsed system fields are verified unchanged, although alignment padding may be regenerated.
 
-Container tests and real Steam file checks cover slot editing, but deletion has not been tested in-game. See [Character-slot management](../README.md#character-slot-management) for the GUI workflow and safety limits.
+Container tests and real Steam file checks cover slot editing, but deletion has not been tested in-game. See [Character-slot management](../README.md#character-slot-management) for the GUI workflow and [Character-slot safety and verification](slot-management.md) for safety limits.

@@ -37,7 +37,7 @@ Slot numbers are 1–3. An occupied/empty exchange moves the character; two empt
 
 The output directory must not already exist, its parent must exist, and it must be outside the source directory. There is no `--force` option for slot swaps. Each character's `SSN_` album/metadata namespace moves with its owner without changing file bytes; unrelated regular files are copied unchanged. The bundle is verified before publishing the output. Back up the original save and test the output with Steam Cloud disabled.
 
-The CLI currently supports inspection and pairwise swaps only. For repeated reordering or confirmed character deletion, use the GUI's **Manage slots** tab. Deletion marks a position empty without automatically shifting the remaining characters and applies only when **Save slots** writes a new output bundle. See [Character-slot management](../README.md#character-slot-management) for validation and safety limits.
+The CLI currently supports inspection and pairwise swaps only. For repeated reordering or confirmed character deletion, use the GUI's **Manage slots** tab. Deletion marks a position empty without automatically shifting the remaining characters and applies only when **Save slots** writes a new output bundle. See [Character-slot safety and verification](slot-management.md) for validation and safety limits.
 
 ## Switch → Steam
 
@@ -98,6 +98,10 @@ Resigning updates the supported identity fields owned by the hunter, not other h
 - `Curve Index` is a Citrus encryption parameter, not an account identifier. The tool detects it from a Steam source save, and detects the destination value from a Steam `--target-reference` template.
 
 On Windows, Steam saves are commonly under `Steam/userdata/<AccountID>/1446780/remote/win64_save`. This directory uses the account's **32-bit AccountID** (the low 32 bits of SteamID64), not the full SteamID64 required by the converter. The `1446780` directory is Monster Hunter Rise's Steam app ID.
+
+### Fixed-account PC saves
+
+For pirated PC copies using TENOKE, account configuration is in `<game directory>/tenoke.ini`; saves may be under `<game directory>/SteamData/win64_save`. Check the actual configuration rather than assuming a fixed SteamID64.
 
 ## Safety
 

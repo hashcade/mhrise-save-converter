@@ -1,0 +1,7 @@
+# Character-slot safety and verification
+
+For GUI instructions, see [Character-slot management](../README.md#character-slot-management).
+
+The operation coordinates system summaries, character filenames and internal slot metadata, and album prefixes. It keeps the same account and platform, copies unrelated regular files unchanged, and does not edit the original save. Deletion restores a complete empty hunter summary, reusing a source empty slot when available. When all three slots are occupied, it uses an owner-free 16.0.2.0 empty summary only for matching, recognized schemas; unsupported layouts are rejected before writing. System alignment padding may be regenerated when a shorter empty summary shifts later fields; every unrelated parsed field is verified unchanged. Existing output directories, incomplete or inconsistent bundles, and subdirectories/symlinks are rejected. Clicking the output Browse button selects a parent directory and proposes a new `swapped-save` subfolder.
+
+Steam and Switch container tests cover exchanges, empty destinations, round trips, deletion from full bundles, deletion of every character, combined moves/deletions, and integrity checks. Real Steam deletion checks verify surviving character/album bytes and every unrelated system field. Slot deletion has not been tested in-game. This is not a guarantee that slot edits fix every loading error; new outputs still need an in-game test.
