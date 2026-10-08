@@ -68,7 +68,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.target }}
+          shared-key: package
+          key: ${{ matrix.target }}
 
       - name: Build release binaries
         run: cargo build --locked --release --target ${{ matrix.target }} --bins

@@ -2,8 +2,21 @@ name: Build
 
 on:
   push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - LICENSE
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - LICENSE
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -14,6 +27,9 @@ env:
 jobs:
   package:
     name: Package ${{ matrix.target }}
+    # The release script's version-only commit is packaged by the tag-triggered Release.
+    if: >-
+      github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: release v')
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +61,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: package
           key: ${{ matrix.target }}
 
       - name: Build release binaries
