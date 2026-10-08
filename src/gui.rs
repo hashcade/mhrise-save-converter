@@ -35,6 +35,7 @@ const FORM_LABEL_WIDTH: f32 = 160.0;
 const FORM_BUTTON_WIDTH: f32 = 84.0;
 const FORM_COLUMN_SPACING: f32 = 12.0;
 const FORM_ROW_HEIGHT: f32 = 28.0;
+const SLOT_ROW_HEIGHT: f32 = 40.0;
 
 enum WorkerEvent {
   Progress(ConversionProgress),
@@ -664,20 +665,27 @@ impl GuiApp {
           let slot = &report.slots[usize::from(*from - 1)];
           ui.label(format!("Slot {}", index + 1));
           ui.allocate_ui_with_layout(
-            egui::vec2(160.0, FORM_ROW_HEIGHT),
+            egui::vec2(160.0, SLOT_ROW_HEIGHT),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-              ui.set_min_size(egui::vec2(160.0, FORM_ROW_HEIGHT));
+              ui.set_min_size(egui::vec2(160.0, SLOT_ROW_HEIGHT));
               ui.label(slot.name.as_deref().unwrap_or("Empty"));
             },
           );
           ui.allocate_ui_with_layout(
-            egui::vec2(140.0, 40.0),
-            egui::Layout::top_down(egui::Align::Min),
+            egui::vec2(140.0, SLOT_ROW_HEIGHT),
+            if slot.occupied() {
+              egui::Layout::top_down(egui::Align::Min)
+            } else {
+              egui::Layout::left_to_right(egui::Align::Center)
+            },
             |ui| {
-              ui.set_min_width(140.0);
+              ui.set_min_size(egui::vec2(140.0, SLOT_ROW_HEIGHT));
               ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
               if slot.occupied() {
+                let text_height = ui.text_style_height(&egui::TextStyle::Body);
+                let block_height = 2.0 * text_height + ui.spacing().item_spacing.y;
+                ui.add_space(((SLOT_ROW_HEIGHT - block_height) / 2.0).max(0.0));
                 ui.label(format!("HR {} · MR {}", slot.hunter_rank, slot.master_rank));
                 ui.weak(slot.playtime());
               } else {
@@ -685,20 +693,25 @@ impl GuiApp {
               }
             },
           );
-          ui.horizontal(|ui| {
-            for (up, label, available) in [(true, "↑", index > 0), (false, "↓", index < 2)] {
-              if ui
-                .add_enabled(
-                  self.worker.is_none() && slot.occupied() && available,
-                  egui::Button::new(label).min_size(egui::vec2(28.0, FORM_ROW_HEIGHT)),
-                )
-                .on_hover_text(if up { "Move up" } else { "Move down" })
-                .clicked()
-              {
-                movement = Some((index, up));
+          ui.allocate_ui_with_layout(
+            egui::vec2(68.0, SLOT_ROW_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+              ui.set_min_size(egui::vec2(68.0, SLOT_ROW_HEIGHT));
+              for (up, label, available) in [(true, "↑", index > 0), (false, "↓", index < 2)] {
+                if ui
+                  .add_enabled(
+                    self.worker.is_none() && slot.occupied() && available,
+                    egui::Button::new(label).min_size(egui::vec2(28.0, FORM_ROW_HEIGHT)),
+                  )
+                  .on_hover_text(if up { "Move up" } else { "Move down" })
+                  .clicked()
+                {
+                  movement = Some((index, up));
+                }
               }
-            }
-          });
+            },
+          );
           ui.end_row();
         }
       });
@@ -1278,6 +1291,78 @@ mod tests {
       || label.contains("original files")));
     app.move_slot(1, true);
     assert_eq!(app.slot_order, [1, 3, 2], "empty rows cannot initiate movement");
+  }
+
+  #[test]
+  fn slot_row_buttons_and_labels_are_vertically_centered() {
+    for visuals in [egui::Visuals::light(), egui::Visuals::dark()] {
+      for width in [680.0, 820.0] {
+        let context = egui::Context::default();
+        context.set_visuals(visuals.clone());
+        let mut app = GuiApp {
+          slots: Some(SlotInspection {
+            platform: Platform::Steam,
+            curve_index: Some(67),
+            slots: (1..=3)
+              .map(|number| mhrise_save_converter::slots::SlotSummary {
+                number,
+                name: (number != 3).then(|| format!("Hunter {number}")),
+                hunter_rank: i32::from(number),
+                master_rank: i32::from(number),
+                playtime_seconds: f64::from(number),
+              })
+              .collect(),
+          }),
+          ..GuiApp::default()
+        };
+        app.slots_key = Some(app.slot_input_key());
+        for _ in 0..3 {
+          let output = context.run(
+            egui::RawInput {
+              screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 520.0),
+              )),
+              ..Default::default()
+            },
+            |ctx| {
+              egui::CentralPanel::default().show(ctx, |ui| app.render_slot_controls(ui, 300.0));
+            },
+          );
+          let centers = |label: &str| {
+            output
+              .shapes
+              .iter()
+              .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                  Some(text.pos.y + text.galley.size().y / 2.0)
+                }
+                _ => None,
+              })
+              .collect::<Vec<_>>()
+          };
+          let up = centers("↑");
+          let down = centers("↓");
+          for (index, name) in ["Hunter 1", "Hunter 2", "Empty"].iter().enumerate() {
+            let center = centers(name)[0];
+            for actual in [up[index], down[index], centers(&format!("Slot {}", index + 1))[0]] {
+              assert!((actual - center).abs() < 1.0, "row {index}: {actual} vs {center}");
+            }
+            if index == 2 {
+              assert!((centers("Empty slot")[0] - center).abs() < 1.0);
+            } else {
+              let progress_center = (centers(&format!("HR {} · MR {}", index + 1, index + 1))[0]
+                + centers(&format!("0:00:0{}", index + 1))[0])
+                / 2.0;
+              assert!(
+                (progress_center - center).abs() < 1.0,
+                "progress row {index}: {progress_center} vs {center}"
+              );
+            }
+          }
+        }
+      }
+    }
   }
 
   #[test]
