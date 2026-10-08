@@ -1,5 +1,7 @@
 //! Coordinated character-slot edits. Source files and account identities are never changed.
 
+mod empty_summary;
+
 use std::{
   collections::BTreeMap,
   fs,
@@ -103,6 +105,18 @@ pub fn reorder_slots(
   order: [u8; 3],
   options: SlotOptions,
 ) -> Result<Vec<PathBuf>> {
+  edit_slots(input, output, order, [false; 3], options)
+}
+
+/// Apply a permutation and deletions together. `deleted` refers to ORIGINAL slot numbers.
+/// Deleted characters and their album namespace are omitted only from the new output bundle.
+pub fn edit_slots(
+  input: &Path,
+  output: &Path,
+  order: [u8; 3],
+  deleted: [bool; 3],
+  options: SlotOptions,
+) -> Result<Vec<PathBuf>> {
   let mut sorted = order;
   sorted.sort_unstable();
   ensure!(sorted == [1, 2, 3], "slot order must contain each position 1–3 exactly once");
@@ -113,28 +127,73 @@ pub fn reorder_slots(
   let parent = fs::canonicalize(parent).context("output parent directory must already exist")?;
   ensure!(!parent.starts_with(&source), "output must be outside the source save directory");
   let mut bundle = load_bundle(&source, options)?;
+  for (index, delete) in deleted.iter().enumerate() {
+    ensure!(
+      !delete || bundle.inspection.slots[index].occupied(),
+      "slot {} is already empty",
+      index + 1
+    );
+  }
   ensure!(
-    order.iter().enumerate().any(|(to, from)| {
-      usize::from(*from - 1) != to && bundle.inspection.slots[usize::from(*from - 1)].occupied()
-    }),
-    "slot order does not move any character"
+    deleted.iter().any(|delete| *delete)
+      || order.iter().enumerate().any(|(to, from)| {
+        usize::from(*from - 1) != to && bundle.inspection.slots[usize::from(*from - 1)].occupied()
+      }),
+    "slot edit does not move or delete any character"
   );
   let offset = class_stream_offset(bundle.inspection.platform);
   let mut expected = bundle.system.clone();
   let FieldValue::Array(hunters) = &mut field_mut(&mut expected, LOAD_INFO, HUNTERS)?.value else {
     bail!("hunter summaries are not an array");
   };
+  let empty = if deleted.iter().any(|delete| *delete) {
+    let source_empty = bundle.inspection.slots.iter().position(|slot| !slot.occupied());
+    let empty = match source_empty {
+      Some(index) => {
+        let ArrayValue::Class(class) = &hunters.values[index] else {
+          bail!("invalid empty summary")
+        };
+        (**class).clone()
+      }
+      None => empty_summary::builtin()?,
+    };
+    for (index, delete) in deleted.iter().enumerate() {
+      if *delete {
+        let ArrayValue::Class(class) = &hunters.values[index] else {
+          bail!("invalid hunter summary")
+        };
+        ensure!(
+          empty_summary::compatible(class, &empty),
+          "unsupported hunter-summary schema for deletion; no files written"
+        );
+      }
+    }
+    Some(empty)
+  } else {
+    None
+  };
   hunters.values = order.map(|from| hunters.values[usize::from(from - 1)].clone()).to_vec();
   if let Some(hashes) = &mut hunters.class_hashes {
     *hashes = order.map(|from| hashes[usize::from(from - 1)]).to_vec();
   }
-  let system_plain = reorder_summaries(&bundle.system_plain, &expected, offset, order)?;
+  if let Some(empty) = empty {
+    for (index, from) in order.iter().enumerate() {
+      if deleted[usize::from(*from - 1)] {
+        hunters.values[index] = ArrayValue::Class(Box::new(empty.clone()));
+        if let Some(hashes) = &mut hunters.class_hashes {
+          hashes[index] = empty.hash;
+        }
+      }
+    }
+  }
+  let system_plain = rewrite_summaries(&bundle.system_plain, &expected, offset, order, deleted)?;
   let system_bytes = repack(&system_plain, &bundle)?;
   bundle.files.insert(SYSTEM_FILE.to_owned(), system_bytes);
 
   for (index, from) in order.iter().copied().enumerate() {
     let to = index as u8 + 1;
     if from != to
+      && !deleted[usize::from(from - 1)]
       && let Some((plain, role)) = bundle.roles.get(&from)
     {
       let moved = move_role(plain, role, offset, from, to)?;
@@ -145,10 +204,16 @@ pub fn reorder_slots(
   }
   let mut output_files = BTreeMap::new();
   for (name, bytes) in bundle.files {
+    if (1..=3).any(|slot| {
+      deleted[usize::from(slot - 1)]
+        && (name == role_filename(slot) || name.starts_with(&format!("SS{slot}_")))
+    }) {
+      continue;
+    }
     let new_name = reordered_filename(&name, order);
     ensure!(
       output_files.insert(new_name, bytes).is_none(),
-      "slot swap produced a filename collision"
+      "slot edit produced a filename collision"
     );
   }
   write_bundle(&parent, output, output_files, bundle.options)
@@ -167,7 +232,7 @@ fn ensure_output_absent(output: &Path) -> Result<()> {
   match fs::symlink_metadata(output) {
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
     Err(error) => Err(error).context("could not inspect output path"),
-    Ok(_) => bail!("slot swap requires a new output directory; overwrite is not supported"),
+    Ok(_) => bail!("slot edits require a new output directory; overwrite is not supported"),
   }
 }
 
@@ -374,20 +439,34 @@ fn move_role(plain: &[u8], role: &SavePayload, offset: usize, from: u8, to: u8) 
   Ok(patched)
 }
 
+#[cfg(test)]
 fn reorder_summaries(
   plain: &[u8],
   expected: &SavePayload,
   offset: usize,
   order: [u8; 3],
 ) -> Result<Vec<u8>> {
+  rewrite_summaries(plain, expected, offset, order, [false; 3])
+}
+
+fn rewrite_summaries(
+  plain: &[u8],
+  expected: &SavePayload,
+  offset: usize,
+  order: [u8; 3],
+  deleted: [bool; 3],
+) -> Result<Vec<u8>> {
   let ranges = array_ranges(plain, offset, &[LOAD_INFO, HUNTERS])?;
   ensure!(ranges.elements.len() == 3, "expected exactly three serialized summaries");
   let mut patched = plain[..ranges.elements[0].start].to_vec();
+  let FieldValue::Array(hunters) = &field(expected, LOAD_INFO, HUNTERS)?.value else {
+    bail!("hunter summaries are not an array");
+  };
   if let Some(hashes) = &ranges.class_hashes {
-    for (to, from) in order.iter().enumerate() {
+    let expected_hashes = hunters.class_hashes.as_ref().context("missing summary hashes")?;
+    for (to, hash) in expected_hashes.iter().enumerate() {
       let a = hashes.start + to * 4;
-      let b = hashes.start + usize::from(*from - 1) * 4;
-      patched[a..a + 4].copy_from_slice(&plain[b..b + 4]);
+      patched[a..a + 4].copy_from_slice(&hash.to_le_bytes());
     }
   }
   for from in order {
@@ -400,11 +479,8 @@ fn reorder_summaries(
   // Relocation can require different padding. Re-encode only the moved
   // summaries, preserving the untouched summary and every surrounding byte.
   patched.truncate(ranges.elements[0].start);
-  let FieldValue::Array(hunters) = &field(expected, LOAD_INFO, HUNTERS)?.value else {
-    bail!("hunter summaries are not an array");
-  };
   for (index, value) in hunters.values.iter().enumerate() {
-    if usize::from(order[index] - 1) != index {
+    if usize::from(order[index] - 1) != index || deleted[usize::from(order[index] - 1)] {
       let ArrayValue::Class(class) = value else {
         bail!("hunter summary is not a class");
       };
@@ -414,6 +490,13 @@ fn reorder_summaries(
     }
   }
   patched.extend_from_slice(&plain[ranges.elements[2].end..]);
+  if deleted.iter().any(|delete| *delete)
+    && !SavePayload::parse_at_offset(&patched, offset).is_ok_and(|parsed| parsed == *expected)
+  {
+    // A smaller empty summary can shift the alignment of following fields.
+    // Canonicalize padding only when necessary; every parsed field must still match.
+    patched = expected.encode_at_offset(offset)?;
+  }
   ensure!(
     SavePayload::parse_at_offset(&patched, offset)? == *expected,
     "slot edit would alter unrelated fields; unsupported save layout"
@@ -446,9 +529,7 @@ fn reordered_filename(name: &str, order: [u8; 3]) -> String {
     if name == role_filename(from) {
       return role_filename(to);
     }
-    if is_auxiliary_filename(name)
-      && let Some(suffix) = name.strip_prefix(&format!("SS{from}_"))
-    {
+    if let Some(suffix) = name.strip_prefix(&format!("SS{from}_")) {
       return format!("SS{to}_{suffix}");
     }
   }
@@ -685,23 +766,19 @@ mod tests {
         field_type: 16,
         value: FieldValue::Scalar { size: 16, bytes: vec![if used { slot } else { 0 }; 16] },
       };
-      summaries.push(ArrayValue::Class(Box::new(Class {
-        hash: 20,
-        fields: vec![
-          text(NAME, &format!("Hunter {slot}")),
-          number(HR, if used { 280 } else { -1 }),
-          number(MR, if used { 122 } else { -1 }),
-          id.clone(),
-          Field {
-            hash: PLAYTIME,
-            field_type: 12,
-            value: FieldValue::Scalar {
-              size: 8,
-              bytes: (if used { 941_646.0_f64 } else { 0.0 }).to_le_bytes().to_vec(),
-            },
-          },
-        ],
-      })));
+      let mut summary = empty_summary::builtin().unwrap();
+      for field in &mut summary.fields {
+        field.value = match field.hash {
+          NAME if used => FieldValue::String(format!("Hunter {slot}").encode_utf16().collect()),
+          HR | MR if used => number(field.hash, if field.hash == HR { 280 } else { 122 }).value,
+          CONSISTENCY => id.value.clone(),
+          PLAYTIME if used => {
+            FieldValue::Scalar { size: 8, bytes: 941_646.0_f64.to_le_bytes().to_vec() }
+          }
+          _ => field.value.clone(),
+        };
+      }
+      summaries.push(ArrayValue::Class(Box::new(summary)));
       if used {
         let mut save = role(slot);
         let (native_hash, mut role_id) =
@@ -747,7 +824,7 @@ mod tests {
                 member_type: 17,
                 member_size: 8,
                 array_type: 1,
-                class_hashes: Some(vec![20; 3]),
+                class_hashes: Some(vec![0x520d_e8df; 3]),
                 values: summaries,
               }),
             },
@@ -871,6 +948,104 @@ mod tests {
         }
       }
     }
+  }
+
+  #[test]
+  fn deletion_clears_summaries_and_omits_only_the_selected_characters_and_albums() {
+    for platform in [TargetPlatform::Steam, TargetPlatform::NintendoSwitch] {
+      let temp = TestDirectory::new();
+      let source = temp.0.join("source");
+      let options = fixture(&source, platform, &[1, 2, 3]);
+      fs::write(source.join("SS10_notes.txt"), b"not slot one").unwrap();
+      fs::write(source.join("SS2_notes.txt"), b"slot two auxiliary metadata").unwrap();
+      let before = load_bundle(&source, options).unwrap();
+      let empty = ArrayValue::Class(Box::new(empty_summary::builtin().unwrap()));
+      for (case, (order, deleted)) in [
+        ([1, 2, 3], [true, false, false]),
+        ([1, 2, 3], [false, true, false]),
+        ([1, 2, 3], [false, false, true]),
+        ([3, 1, 2], [true, false, false]),
+        ([2, 3, 1], [true, true, false]),
+        ([1, 2, 3], [true; 3]),
+      ]
+      .into_iter()
+      .enumerate()
+      {
+        let output = temp.0.join(format!("deleted{case}"));
+        edit_slots(&source, &output, order, deleted, options).unwrap();
+        let after = load_bundle(&output, options).unwrap();
+        let mut expected = before.system.clone();
+        let FieldValue::Array(hunters) =
+          &mut field_mut(&mut expected, LOAD_INFO, HUNTERS).unwrap().value
+        else {
+          panic!()
+        };
+        let original = hunters.values.clone();
+        for (index, from) in order.into_iter().enumerate() {
+          if deleted[usize::from(from - 1)] {
+            hunters.values[index] = empty.clone();
+            assert!(!after.inspection.slots[index].occupied());
+            assert!(!after.files.contains_key(&role_filename(index as u8 + 1)));
+            assert!(!after.files.keys().any(|name| name.starts_with(&format!("SS{}_", index + 1))));
+          } else {
+            hunters.values[index] = original[usize::from(from - 1)].clone();
+            assert_eq!(
+              after.inspection.slots[index].name,
+              before.inspection.slots[usize::from(from - 1)].name
+            );
+            assert_eq!(
+              after.files[&format!("SS{}_data338Slot.bin", index + 1)],
+              before.files[&format!("SS{from}_data338Slot.bin")]
+            );
+            if usize::from(from) == index + 1 {
+              assert_eq!(after.files[&role_filename(from)], before.files[&role_filename(from)]);
+            }
+          }
+        }
+        assert_eq!(after.system, expected, "only summaries may change");
+        assert_eq!(after.files["SS10_notes.txt"], b"not slot one");
+        assert_eq!(after.files["unrecognized-file.dat"], before.files["unrecognized-file.dat"]);
+        if !deleted[1] {
+          assert_eq!(
+            after.files[&reordered_filename("SS2_notes.txt", order)],
+            before.files["SS2_notes.txt"]
+          );
+        }
+      }
+      assert_eq!(load_bundle(&source, options).unwrap().files, before.files);
+    }
+  }
+
+  #[test]
+  fn deletion_reuses_source_empty_summary_and_rejects_empty_or_unknown_slots() {
+    let temp = TestDirectory::new();
+    let source = temp.0.join("source");
+    let options = fixture(&source, TargetPlatform::NintendoSwitch, &[1]);
+    let before = load_bundle(&source, options).unwrap();
+    let output = temp.0.join("deleted");
+    edit_slots(&source, &output, [1, 2, 3], [true, false, false], options).unwrap();
+    assert!(inspect_slots(&output, options).unwrap().slots.iter().all(|slot| !slot.occupied()));
+    let output = temp.0.join("empty");
+    assert!(edit_slots(&source, &output, [1, 2, 3], [false, true, false], options).is_err());
+    assert!(!output.exists());
+    assert_eq!(load_bundle(&source, options).unwrap().files, before.files);
+
+    let full = temp.0.join("full");
+    fixture(&full, TargetPlatform::NintendoSwitch, &[1, 2, 3]);
+    let mut bundle = load_bundle(&full, options).unwrap();
+    let FieldValue::Array(hunters) =
+      &mut field_mut(&mut bundle.system, LOAD_INFO, HUNTERS).unwrap().value
+    else {
+      panic!()
+    };
+    let ArrayValue::Class(class) = &mut hunters.values[0] else { panic!() };
+    class.fields.push(number(0xdead_beef, 99));
+    let plain = bundle.system.encode_at_offset(12).unwrap();
+    fs::write(full.join(SYSTEM_FILE), repack(&plain, &bundle).unwrap()).unwrap();
+    let output = temp.0.join("unknown");
+    let error = edit_slots(&full, &output, [1, 2, 3], [true, false, false], options).unwrap_err();
+    assert!(error.to_string().contains("unsupported hunter-summary schema"));
+    assert!(!output.exists());
   }
 
   #[test]
