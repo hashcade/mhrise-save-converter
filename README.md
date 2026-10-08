@@ -64,8 +64,8 @@ Pushes to `main` and pull requests run CI and four-platform packaging; documenta
 Publish from a clean, up-to-date `main` checkout with Python 3.9+, Git, and Rust:
 
 ```bash
-python3 tools/release.py --bump patch --yes
-python3 tools/release.py --bump minor --yes
+python3 scripts/release.py --bump patch --yes
+python3 scripts/release.py --bump minor --yes
 ```
 
 Run only one command for the intended version increment. With no arguments, the script proposes a patch bump and asks for confirmation. `--current` publishes the existing package version without bumping it; existing tags are rejected. The script checks the CLI, updates `Cargo.toml`/`Cargo.lock`, commits the version bump, pushes `main`, and pushes an annotated tag. GitHub Actions builds and verifies the four release packages. The publishing script uses only Python's standard library; CI packaging also uses `scripts/package.py`.
