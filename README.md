@@ -13,7 +13,17 @@ Download the latest package from [Releases](https://github.com/jinghaihan/mhrise
 cargo run --release --bin mhrise-save-converter-gui
 ```
 
-Choose a source save, a new output directory, and the target platform. For Steam conversion, enter the relevant SteamID64 and preferably select an existing target save as the template; the app can read the destination Curve Index automatically. The source and template are never modified. The GUI performs a preflight check, converts in the background, shows per-file progress, and can open the output folder.
+Choose a source save, an output directory, and the target platform. For Steam conversion, enter the relevant SteamID64 and preferably select an existing target save as the template; the app can read the destination Curve Index automatically. The source and template are never modified. The GUI performs a preflight check, converts in the background, shows per-file progress, and can open the output folder.
+
+Required SteamID64 fields are visible in the main form; Switch inputs do not need an ID. Advanced options contain only Curve Index overrides. Conversion can write into an existing non-empty directory without changing unrelated files. If generated filenames already exist, the GUI lists the conflicts and asks for confirmation before writing. Cancelling leaves the existing files unchanged.
+
+## Character-slot swap
+
+Open the **Swap slots** tab to manage slots independently of conversion. Choose the complete source save folder and a new, nonexistent output folder. For Steam, enter the current account's SteamID64; the Curve Index is detected automatically. Choose **Read save** to display all three slots. In the table, select the character in **Move character** and its target position in **Destination**. An empty destination produces a **Move to slot N** action and leaves the original position empty; an occupied destination exchanges the two characters instead.
+
+The operation coordinates system summaries, character filenames and internal slot metadata, and album prefixes. It keeps the same account and platform, copies other regular files unchanged, and does not edit the original save. Existing output directories, incomplete or inconsistent bundles, and subdirectories/symlinks are rejected. Clicking the output Browse button selects a parent directory and proposes a new `swapped-save` subfolder.
+
+Steam and Switch container tests cover exchanges, empty destinations, round trips, and integrity checks. The generalized implementation has also been checked with a real Steam bundle. This is not a guarantee that swapping fixes every loading error; new outputs still need an in-game test. Slot deletion is not implemented.
 
 ## Steam inputs
 

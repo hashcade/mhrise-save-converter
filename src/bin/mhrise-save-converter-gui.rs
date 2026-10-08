@@ -13,6 +13,6 @@ fn main() -> eframe::Result {
   eframe::run_native(
     "Monster Hunter Rise Save Converter",
     options,
-    Box::new(|_context| Ok(Box::new(app::GuiApp::default()))),
+    Box::new(|context| Ok(Box::new(app::GuiApp::new(context)))),
   )
 }

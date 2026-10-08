@@ -18,6 +18,25 @@ mhrise-save verify /path/to/save
 
 During development, run these commands from the repository with `cargo run --` instead of `mhrise-save`.
 
+## Character slots
+
+List the three positions (the Steam account ID is unnecessary for Switch saves):
+
+```bash
+mhrise-save slots /path/to/win64_save --steamid64 <CURRENT_STEAMID64>
+```
+
+Exchange slots 1 and 2 while preserving the platform and account:
+
+```bash
+mhrise-save swap-slots /path/to/win64_save /path/to/new-swapped-save \
+  --first 1 --second 2 --steamid64 <CURRENT_STEAMID64>
+```
+
+Slot numbers are 1–3. An occupied/empty exchange moves the character; two empty slots or the same slot are rejected. `--curve-index` optionally overrides automatic Steam curve detection. A target template is not required.
+
+The output directory must not already exist, its parent must exist, and it must be outside the source directory. There is no `--force` option for slot swaps. Character albums move with their owner; unsupported regular files are copied unchanged. The bundle is verified before publishing the output. Back up the original save and test the output with Steam Cloud disabled. Deletion is not supported.
+
 ## Switch → Steam
 
 Use an existing Steam save as the target template when possible. It provides the destination schema, platform settings, metadata, and Curve Index:
@@ -61,7 +80,7 @@ mhrise-save convert /path/to/source/win64_save /path/to/new-steam-save \
   --target-reference /path/to/target/win64_save
 ```
 
-Add `--source-curve-index` or `--target-curve-index` only when automatic detection is unavailable. Add `--force` only when intentionally reusing a non-empty output path.
+Add `--source-curve-index` or `--target-curve-index` only when automatic detection is unavailable. Non-empty conversion output directories are allowed; unrelated files are kept. Add `--force` only to overwrite generated files with the same names. Source and target template files must not be used as output files, even with `--force`. Slot swaps still require a new output directory.
 
 Resigning updates the supported identity fields owned by the hunter, not other hunters' guild cards. It does not move characters between slots, replace statistics, or copy the target account's gameplay progress. For known fixes and the limits of the reported in-game slot-swap recovery, see [Steam resigning findings](steam-resigning.md).
 
