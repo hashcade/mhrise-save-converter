@@ -155,7 +155,7 @@ pub fn edit_slots(
         };
         (**class).clone()
       }
-      None => empty_summary::builtin()?,
+      None => empty_summary::builtin(bundle.inspection.platform)?,
     };
     for (index, delete) in deleted.iter().enumerate() {
       if *delete {
@@ -298,15 +298,15 @@ fn load_bundle(input: &Path, mut options: SlotOptions) -> Result<Bundle> {
     };
     let playtime = f64::from_le_bytes(playtime.as_slice().try_into()?);
     ensure!(playtime.is_finite() && playtime >= 0.0, "slot {number} has invalid playtime");
-    let id = get(CONSISTENCY)?;
-    let FieldValue::Scalar { size: 16, bytes: guid } = &id.value else {
-      bail!("slot {number} has an unsupported character ID");
+    // Switch summaries do not contain Steam's character-consistency ID.
+    let summary_id =
+      if platform == Platform::Steam { Some(character_id(get(CONSISTENCY)?)?) } else { None };
+    let occupied = hr >= 0 && mr >= 0;
+    let consistent = match summary_id {
+      Some(guid) => guid.iter().any(|byte| *byte != 0) == occupied,
+      None => occupied || (hr == -1 && mr == -1),
     };
-    let occupied = guid.iter().any(|byte| *byte != 0);
-    ensure!(
-      occupied == (hr >= 0 && mr >= 0),
-      "slot {number} summary has inconsistent empty-slot markers"
-    );
+    ensure!(consistent, "slot {number} summary has inconsistent empty-slot markers");
     let name = role_filename(number);
     if let Some(bytes) = files.get(&name) {
       ensure!(
@@ -322,7 +322,11 @@ fn load_bundle(input: &Path, mut options: SlotOptions) -> Result<Bundle> {
       } else {
         field(&role, HUNTER_RECORD, HUNTER_ID)?
       };
-      ensure!(role_id.value == id.value, "slot {number} summary and character IDs differ");
+      let role_id = character_id(role_id)?;
+      ensure!(role_id.iter().any(|byte| *byte != 0), "slot {number} has an empty character ID");
+      if let Some(summary_id) = summary_id {
+        ensure!(role_id == summary_id, "slot {number} summary and character IDs differ");
+      }
       validate_role_position(&role, number)?;
       roles.insert(number, (plain, role));
     } else {
@@ -387,6 +391,14 @@ fn scalar_i32(field: &Field) -> Result<i32> {
     bail!("field {:08x} is not a 32-bit value", field.hash);
   };
   Ok(i32::from_le_bytes(bytes.as_slice().try_into()?))
+}
+
+fn character_id(field: &Field) -> Result<&[u8]> {
+  let FieldValue::Scalar { size: 16, bytes } = &field.value else {
+    bail!("unsupported character ID field {:08x}", field.hash);
+  };
+  ensure!(bytes.len() == 16, "invalid character ID length");
+  Ok(bytes)
 }
 
 fn string(field: &Field) -> Result<String> {
@@ -756,8 +768,14 @@ mod tests {
 
   fn fixture(path: &Path, platform: TargetPlatform, occupied: &[u8]) -> SlotOptions {
     fs::create_dir(path).unwrap();
-    let options = SlotOptions { steamid64: Some(76561198652986089), curve_index: Some(67) };
+    let options = if platform == TargetPlatform::Steam {
+      SlotOptions { steamid64: Some(76561198652986089), curve_index: Some(67) }
+    } else {
+      SlotOptions::default()
+    };
     let offset = if platform == TargetPlatform::Steam { 16 } else { 12 };
+    let summary_platform =
+      if platform == TargetPlatform::Steam { Platform::Steam } else { Platform::NintendoSwitch };
     let mut summaries = Vec::new();
     for slot in 1..=3 {
       let used = occupied.contains(&slot);
@@ -766,7 +784,7 @@ mod tests {
         field_type: 16,
         value: FieldValue::Scalar { size: 16, bytes: vec![if used { slot } else { 0 }; 16] },
       };
-      let mut summary = empty_summary::builtin().unwrap();
+      let mut summary = empty_summary::builtin(summary_platform).unwrap();
       for field in &mut summary.fields {
         field.value = match field.hash {
           NAME if used => FieldValue::String(format!("Hunter {slot}").encode_utf16().collect()),
@@ -855,6 +873,14 @@ mod tests {
       let source = temp.0.join("source");
       let options = fixture(&source, TargetPlatform::NintendoSwitch, &occupied);
       let before = load_bundle(&source, options).unwrap();
+      let FieldValue::Array(hunters) = &field(&before.system, LOAD_INFO, HUNTERS).unwrap().value
+      else {
+        panic!()
+      };
+      for value in &hunters.values {
+        let ArrayValue::Class(summary) = value else { panic!() };
+        assert!(!summary.fields.iter().any(|field| field.hash == CONSISTENCY));
+      }
       for (first, second) in [(1, 2), (1, 3), (2, 3)] {
         let output = temp.0.join(format!("swapped{first}{second}"));
         if !occupied.contains(&first) && !occupied.contains(&second) {
@@ -959,7 +985,8 @@ mod tests {
       fs::write(source.join("SS10_notes.txt"), b"not slot one").unwrap();
       fs::write(source.join("SS2_notes.txt"), b"slot two auxiliary metadata").unwrap();
       let before = load_bundle(&source, options).unwrap();
-      let empty = ArrayValue::Class(Box::new(empty_summary::builtin().unwrap()));
+      let empty =
+        ArrayValue::Class(Box::new(empty_summary::builtin(before.inspection.platform).unwrap()));
       for (case, (order, deleted)) in [
         ([1, 2, 3], [true, false, false]),
         ([1, 2, 3], [false, true, false]),
@@ -1061,6 +1088,82 @@ mod tests {
     assert_eq!(report.curve_index, Some(67));
     assert!(!report.slots[0].occupied());
     assert_eq!(report.slots[2].name.as_deref(), Some("Hunter 1"));
+  }
+
+  #[test]
+  fn switch_rejects_inconsistent_markers_and_invalid_character_files_without_writing() {
+    for case in ["mixed-ranks", "invalid-id", "empty-id", "wrong-position"] {
+      let temp = TestDirectory::new();
+      let source = temp.0.join("source");
+      let options = fixture(&source, TargetPlatform::NintendoSwitch, &[1]);
+      let mut bundle = load_bundle(&source, options).unwrap();
+      let (filename, plain, expected_error) = if case == "mixed-ranks" {
+        let FieldValue::Array(hunters) =
+          &mut field_mut(&mut bundle.system, LOAD_INFO, HUNTERS).unwrap().value
+        else {
+          panic!()
+        };
+        let ArrayValue::Class(summary) = &mut hunters.values[0] else { panic!() };
+        summary.fields.iter_mut().find(|field| field.hash == HR).unwrap().value =
+          number(HR, -1).value;
+        (
+          SYSTEM_FILE.to_owned(),
+          bundle.system.encode_at_offset(12).unwrap(),
+          "inconsistent empty-slot markers",
+        )
+      } else {
+        let role = &mut bundle.roles.get_mut(&1).unwrap().1;
+        let error = match case {
+          "invalid-id" => {
+            field_mut(role, HUNTER_RECORD, HUNTER_ID).unwrap().value = number(HUNTER_ID, 1).value;
+            "unsupported character ID"
+          }
+          "empty-id" => {
+            field_mut(role, HUNTER_RECORD, HUNTER_ID).unwrap().value =
+              FieldValue::Scalar { size: 16, bytes: vec![0; 16] };
+            "empty character ID"
+          }
+          "wrong-position" => {
+            field_mut(role, DETAIL, SLOT_NUMBER).unwrap().value = number(SLOT_NUMBER, 2).value;
+            "mismatched slot number"
+          }
+          _ => unreachable!(),
+        };
+        (role_filename(1), role.encode_at_offset(12).unwrap(), error)
+      };
+      fs::write(source.join(filename), repack(&plain, &bundle).unwrap()).unwrap();
+      let output = temp.0.join("output");
+      let error = swap_slots(&source, &output, 1, 3, options).unwrap_err();
+      assert!(error.to_string().contains(expected_error), "{case}: {error:#}");
+      assert!(!output.exists());
+    }
+  }
+
+  #[test]
+  fn steam_still_requires_matching_summary_and_character_ids() {
+    for missing in [false, true] {
+      let temp = TestDirectory::new();
+      let source = temp.0.join("source");
+      let options = fixture(&source, TargetPlatform::Steam, &[1]);
+      let mut bundle = load_bundle(&source, options).unwrap();
+      let FieldValue::Array(hunters) =
+        &mut field_mut(&mut bundle.system, LOAD_INFO, HUNTERS).unwrap().value
+      else {
+        panic!()
+      };
+      let ArrayValue::Class(summary) = &mut hunters.values[0] else { panic!() };
+      if missing {
+        summary.fields.retain(|field| field.hash != CONSISTENCY);
+      } else {
+        summary.fields.iter_mut().find(|field| field.hash == CONSISTENCY).unwrap().value =
+          FieldValue::Scalar { size: 16, bytes: vec![9; 16] };
+      }
+      let plain = bundle.system.encode_at_offset(16).unwrap();
+      fs::write(source.join(SYSTEM_FILE), repack(&plain, &bundle).unwrap()).unwrap();
+      let error = inspect_slots(&source, options).unwrap_err();
+      let expected = if missing { "missing field e40fc0cd" } else { "character IDs differ" };
+      assert!(error.to_string().contains(expected), "{error:#}");
+    }
   }
 
   #[test]

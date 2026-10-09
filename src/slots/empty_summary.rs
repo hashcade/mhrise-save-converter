@@ -1,11 +1,14 @@
 use anyhow::{Result, ensure};
 use hex_literal::hex;
 
-use crate::payload::{ArrayValue, Class, FieldValue, SavePayload};
+use crate::{
+  format::Platform,
+  payload::{ArrayValue, Class, FieldValue, SavePayload},
+};
 
 // Canonically encoded, owner-free empty summary captured from MHRise 16.0.2.0.
 // Used only when the source has no empty slot and its schema matches this snapshot.
-pub(super) fn builtin() -> Result<Class> {
+pub(super) fn builtin(platform: Platform) -> Result<Class> {
   let bytes = hex!(
     "
     0000000021000000dfe80d52f63a9ff70f000000060000002800ee4e29000d54
@@ -43,7 +46,12 @@ pub(super) fn builtin() -> Result<Class> {
   );
   let mut payload = SavePayload::parse(&bytes)?;
   ensure!(payload.entries.len() == 1, "invalid built-in empty-slot snapshot");
-  Ok(payload.entries.remove(0).class)
+  let mut summary = payload.entries.remove(0).class;
+  if platform == Platform::NintendoSwitch {
+    // The matching Switch schema has no Steam-only consistency field.
+    summary.fields.retain(|field| field.hash != super::CONSISTENCY);
+  }
+  Ok(summary)
 }
 
 pub(super) fn compatible(source: &Class, empty: &Class) -> bool {
@@ -98,12 +106,27 @@ fn same_class(source: &Class, empty: &Class, nullable: Option<u32>) -> bool {
 
 #[cfg(test)]
 mod tests {
+  use super::super::CONSISTENCY;
   use super::*;
   use crate::payload::Field;
 
   #[test]
+  fn switch_snapshot_omits_only_the_steam_consistency_field() {
+    let steam = builtin(Platform::Steam).unwrap();
+    let switch = builtin(Platform::NintendoSwitch).unwrap();
+    assert_eq!(steam.fields.len(), 33);
+    assert_eq!(switch.fields.len(), 32);
+    assert!(!switch.fields.iter().any(|field| field.hash == CONSISTENCY));
+    let mut expected = steam.clone();
+    expected.fields.retain(|field| field.hash != CONSISTENCY);
+    assert_eq!(switch, expected);
+    assert!(!compatible(&switch, &steam));
+    assert!(!compatible(&steam, &switch));
+  }
+
+  #[test]
   fn snapshot_supports_populated_previews_but_rejects_unknown_layouts() {
-    let empty = builtin().unwrap();
+    let empty = builtin(Platform::Steam).unwrap();
     assert_eq!(empty.hash, 0x520d_e8df);
     assert_eq!(empty.fields.len(), 33);
     let mut occupied = empty.clone();
