@@ -1,6 +1,6 @@
 [package]
 name = "mhrise-save-converter"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 rust-version = "1.92"
 description = "A CLI for inspecting and converting Monster Hunter Rise save containers."
